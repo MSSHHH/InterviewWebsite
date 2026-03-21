@@ -23,7 +23,17 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 微信公众号相关接口
+ * 微信公众号回调控制器。
+ *
+ * 主要职责：
+ * 1) 接收公众号服务端回调消息；
+ * 2) 校验签名，防止伪造请求；
+ * 3) 解析加密消息并路由到 WxMpMessageRouter；
+ * 4) 提供菜单创建、接入校验等运维接口。
+ *
+ * 说明：
+ * - 该控制器直接对接微信协议层，参数命名与微信文档保持一致；
+ * - 业务响应内容由路由器中的 handler 决定，控制器只做协议编排。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航知识星球</a>

@@ -76,6 +76,19 @@
 
 > 所有需要修改的地方鱼皮都标记了 `todo`，便于大家找到修改的位置~
 
+### 环境变量方式配置（推荐）
+
+已支持通过环境变量覆盖配置，示例见 `.env.example`。  
+常见做法是先导出变量，再启动后端，例如：
+
+```bash
+export MYSQL_URL="jdbc:mysql://localhost:3306/mianshiya"
+export MYSQL_USERNAME="root"
+export MYSQL_PASSWORD="123456"
+export REDIS_HOST="localhost"
+export REDIS_PORT="6379"
+```
+
 ### MySQL 数据库
 
 1）修改 `application.yml` 的数据库配置为你自己的：
@@ -144,25 +157,21 @@ spring:
     password: 123456
 ```
 
-2）复制 `sql/post_es_mapping.json` 文件中的内容，通过调用 Elasticsearch 的接口或者 Kibana Dev Tools 来创建索引（相当于数据库建表）
+2）复制 `sql/question_es_mapping.json` 文件中的内容，通过调用 Elasticsearch 的接口或者 Kibana Dev Tools 来创建索引（相当于数据库建表）
 
 ```
 PUT post_v1
 {
- 参数见 sql/post_es_mapping.json 文件
+ 参数见 sql/question_es_mapping.json 文件
 }
 ```
 
 这步不会操作的话需要补充下 Elasticsearch 的知识，或者自行百度一下~
 
-3）开启同步任务，将数据库的帖子同步到 Elasticsearch
+3）开启同步任务，将数据库的题目同步到 Elasticsearch
 
-找到 job 目录下的 `FullSyncPostToEs` 和 `IncSyncPostToEs` 文件，取消掉 `@Component` 注解的注释，再次执行程序即可触发同步：
-
-```java
-// todo 取消注释开启任务
-//@Component
-```
+默认已开启增量同步任务 `IncSyncQuestionToEs`（每分钟执行）。  
+如需全量初始化，可在 `FullSyncQuestionToEs` 上启用 `@Component` 后启动一次应用完成全量同步。
 
 ### 业务代码生成器
 

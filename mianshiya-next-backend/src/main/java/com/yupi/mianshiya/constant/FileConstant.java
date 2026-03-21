@@ -12,5 +12,6 @@ public interface FileConstant {
      * COS 访问地址
      * todo 需替换配置
      */
-    String COS_HOST = "https://yupi.icu";
+    String COS_HOST = System.getProperty("COS_HOST",
+            System.getenv().getOrDefault("COS_HOST", "https://yupi.icu"));
 }

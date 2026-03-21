@@ -2,7 +2,7 @@
 import { GithubFilled, LogoutOutlined, UserOutlined } from "@ant-design/icons";
 import { ProLayout } from "@ant-design/pro-components";
 import { Dropdown, message } from "antd";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -28,10 +28,15 @@ interface Props {
  */
 export default function BasicLayout({ children }: Props) {
   const pathname = usePathname();
+  const [mounted, setMounted] = useState(false);
   // 当前登录用户
   const loginUser = useSelector((state: RootState) => state.loginUser);
   const dispatch = useDispatch<AppDispatch>();
   const router = useRouter();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   /**
    * 用户注销
@@ -55,6 +60,8 @@ export default function BasicLayout({ children }: Props) {
         overflow: "auto",
       }}
     >
+      {!mounted ? <div>{children}</div> : null}
+      {mounted ? (
       <ProLayout
         title="面试鸭刷题平台"
         layout="top"
@@ -154,6 +161,7 @@ export default function BasicLayout({ children }: Props) {
       >
         {children}
       </ProLayout>
+      ) : null}
     </div>
   );
 }

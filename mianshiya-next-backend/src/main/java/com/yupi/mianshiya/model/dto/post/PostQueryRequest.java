@@ -17,17 +17,17 @@ import lombok.EqualsAndHashCode;
 public class PostQueryRequest extends PageRequest implements Serializable {
 
     /**
-     * id
+     * 指定帖子 id（精确查询）。
      */
     private Long id;
 
     /**
-     * id
+     * 排除帖子 id（相关推荐场景常用）。
      */
     private Long notId;
 
     /**
-     * 搜索词
+     * 通用搜索词（通常匹配标题、正文、描述等字段）。
      */
     private String searchText;
 
@@ -47,17 +47,17 @@ public class PostQueryRequest extends PageRequest implements Serializable {
     private List<String> tags;
 
     /**
-     * 至少有一个标签
+     * “或”标签集合：命中任意一个标签即可。
      */
     private List<String> orTags;
 
     /**
-     * 创建用户 id
+     * 发帖用户 id（按作者过滤）。
      */
     private Long userId;
 
     /**
-     * 收藏用户 id
+     * 收藏该帖子的用户 id（用于“我收藏的帖子”查询）。
      */
     private Long favourUserId;
 

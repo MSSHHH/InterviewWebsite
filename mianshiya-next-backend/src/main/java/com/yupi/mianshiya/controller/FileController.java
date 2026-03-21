@@ -24,7 +24,16 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * 文件接口
+ * 文件上传控制器。
+ *
+ * 主要职责：
+ * 1) 接收前端 multipart 文件；
+ * 2) 根据业务类型（biz）执行大小 / 后缀校验；
+ * 3) 按“业务目录 + 用户 id + 随机文件名”生成对象存储路径；
+ * 4) 调用 COS 管理器上传并返回可访问 URL。
+ *
+ * 该控制器只负责“接入层校验 + 路径编排 + 上传编排”，
+ * 不承载复杂业务逻辑，便于后续替换存储实现（如 OSS / MinIO）。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航知识星球</a>

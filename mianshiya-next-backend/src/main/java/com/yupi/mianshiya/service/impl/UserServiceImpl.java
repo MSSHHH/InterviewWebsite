@@ -6,6 +6,8 @@ import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.collection.CollUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.constant.CommonConstant;
 import com.yupi.mianshiya.constant.RedisConstant;
@@ -21,8 +23,8 @@ import com.yupi.mianshiya.service.UserService;
 import com.yupi.mianshiya.utils.SqlUtils;
 
 import java.time.LocalDate;
-import java.time.Year;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
@@ -47,6 +49,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Resource
     private RedissonClient redissonClient;
+
+    /**
+     * 签到记录本地缓存，减少重复读取 Redis BitMap 的开销
+     */
+    private final Cache<String, List<Integer>> signInRecordLocalCache = Caffeine.newBuilder()
+            .initialCapacity(256)
+            .maximumSize(10_000)
+            .expireAfterWrite(2, TimeUnit.MINUTES)
+            .build();
 
     /**
      * 盐值，混淆密码
@@ -307,7 +318,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public boolean addUserSignIn(long userId) {
         LocalDate date = LocalDate.now();
-        String key = RedisConstant.getUserSignInRedisKey(date.getYear(), userId);
+        int year = date.getYear();
+        String key = RedisConstant.getUserSignInRedisKey(year, userId);
         // 获取 Redis 的 BitMap
         RBitSet signInBitSet = redissonClient.getBitSet(key);
         // 获取当前日期是一年中的第几天，作为偏移量（从 1 开始计数）
@@ -317,6 +329,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             // 如果当前未签到，则设置
             signInBitSet.set(offset, true);
         }
+        // 使本地缓存失效，下次读取返回最新签到记录
+        signInRecordLocalCache.invalidate(getUserSignInRecordCacheKey(userId, year));
         // 当天已签到
         return true;
     }
@@ -334,6 +348,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             LocalDate date = LocalDate.now();
             year = date.getYear();
         }
+        String localCacheKey = getUserSignInRecordCacheKey(userId, year);
+        List<Integer> localCachedDayList = signInRecordLocalCache.getIfPresent(localCacheKey);
+        if (localCachedDayList != null) {
+            return new ArrayList<>(localCachedDayList);
+        }
         String key = RedisConstant.getUserSignInRedisKey(year, userId);
         // 获取 Redis 的 BitMap
         RBitSet signInBitSet = redissonClient.getBitSet(key);
@@ -348,11 +367,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             // 继续查找下一个被设置为 1 的位
             index = bitSet.nextSetBit(index + 1);
         }
+        signInRecordLocalCache.put(localCacheKey, new ArrayList<>(dayList));
         return dayList;
     }
+
+    private String getUserSignInRecordCacheKey(long userId, int year) {
+        return String.format("signIn:record:%s:%s", userId, year);
+    }
 }
-
-
 
 
 

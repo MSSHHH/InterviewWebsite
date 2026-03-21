@@ -1,5 +1,3 @@
-"use server";
-import { message } from "antd";
 import { getQuestionVoByIdUsingGet } from "@/api/questionController";
 import QuestionCard from "@/components/QuestionCard";
 import "./index.css";
@@ -19,7 +17,7 @@ export default async function QuestionPage({ params }) {
     });
     question = res.data;
   } catch (e) {
-    message.error("获取题目详情失败，" + e.message);
+    console.error("获取题目详情失败", e);
   }
   // 错误处理
   if (!question) {

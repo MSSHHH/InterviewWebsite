@@ -2,9 +2,11 @@ package com.yupi.mianshiya.config;
 
 import com.jd.platform.hotkey.client.ClientStarter;
 import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import javax.annotation.PostConstruct;
 
 /**
  * hotkey 热 key 发现配置
@@ -12,10 +14,10 @@ import org.springframework.context.annotation.Configuration;
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航</a>
  */
-// todo 取消注释开启 HotKey（须先配置 HotKey）
-//@Configuration
-//@ConfigurationProperties(prefix = "hotkey")
+@Configuration
+@ConfigurationProperties(prefix = "hotkey")
 @Data
+@Slf4j
 public class HotKeyConfig {
 
     /**
@@ -26,7 +28,7 @@ public class HotKeyConfig {
     /**
      * 应用名称
      */
-    private String appName = "app";
+    private String appName = "mianshiya";
 
     /**
      * 本地缓存最大数量
@@ -38,18 +40,28 @@ public class HotKeyConfig {
      */
     private long pushPeriod = 1000L;
 
+    private volatile boolean started = false;
+
     /**
      * 初始化 hotkey
      */
-    @Bean
+    @PostConstruct
     public void initHotkey() {
-        ClientStarter.Builder builder = new ClientStarter.Builder();
-        ClientStarter starter = builder.setAppName(appName)
-                .setCaffeineSize(caffeineSize)
-                .setPushPeriod(pushPeriod)
-                .setEtcdServer(etcdServer)
-                .build();
-        starter.startPipeline();
+        try {
+            ClientStarter.Builder builder = new ClientStarter.Builder();
+            ClientStarter starter = builder.setAppName(appName)
+                    .setCaffeineSize(caffeineSize)
+                    .setPushPeriod(pushPeriod)
+                    .setEtcdServer(etcdServer)
+                    .build();
+            starter.startPipeline();
+            started = true;
+            log.info("hotkey client started, appName={}, etcdServer={}, caffeineSize={}", appName, etcdServer, caffeineSize);
+        } catch (Exception e) {
+            // 不让 HotKey 初始化失败影响主流程，降级走 Caffeine 本地缓存
+            started = false;
+            log.error("hotkey client start failed, fallback to local cache only", e);
+        }
     }
 
 }

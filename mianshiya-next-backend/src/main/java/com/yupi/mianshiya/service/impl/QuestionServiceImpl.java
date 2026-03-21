@@ -108,7 +108,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         if (questionQueryRequest == null) {
             return queryWrapper;
         }
-        // todo 从对象中取值
+        // 从请求对象中提取查询参数
         Long id = questionQueryRequest.getId();
         Long notId = questionQueryRequest.getNotId();
         String title = questionQueryRequest.getTitle();
@@ -119,27 +119,27 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         List<String> tagList = questionQueryRequest.getTags();
         Long userId = questionQueryRequest.getUserId();
         String answer = questionQueryRequest.getAnswer();
-        // todo 补充需要的查询条件
-        // 从多字段中搜索
+        // MySQL 查询场景：使用 like 实现模糊匹配
+        // 这里保留这段逻辑，作为 ES 不可用时的兜底能力
         if (StringUtils.isNotBlank(searchText)) {
-            // 需要拼接查询条件
             queryWrapper.and(qw -> qw.like("title", searchText).or().like("content", searchText));
         }
-        // 模糊查询
+        // 单字段模糊查询
         queryWrapper.like(StringUtils.isNotBlank(title), "title", title);
         queryWrapper.like(StringUtils.isNotBlank(content), "content", content);
         queryWrapper.like(StringUtils.isNotBlank(answer), "answer", answer);
-        // JSON 数组查询
+        // tags 在库里是 JSON 字符串，这里通过 like 做包含匹配
+        // 例如 tag = Java 时匹配 "Java"
         if (CollUtil.isNotEmpty(tagList)) {
             for (String tag : tagList) {
                 queryWrapper.like("tags", "\"" + tag + "\"");
             }
         }
-        // 精确查询
+        // 精确过滤条件
         queryWrapper.ne(ObjectUtils.isNotEmpty(notId), "id", notId);
         queryWrapper.eq(ObjectUtils.isNotEmpty(id), "id", id);
         queryWrapper.eq(ObjectUtils.isNotEmpty(userId), "userId", userId);
-        // 排序规则
+        // 排序规则（先校验字段合法性，防止恶意注入）
         queryWrapper.orderBy(SqlUtils.validSortField(sortField),
                 sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
                 sortField);
@@ -256,22 +256,22 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
      */
     @Override
     public Page<Question> searchFromEs(QuestionQueryRequest questionQueryRequest) {
-        // 获取参数
+        // 1) 获取请求参数
         Long id = questionQueryRequest.getId();
         Long notId = questionQueryRequest.getNotId();
         String searchText = questionQueryRequest.getSearchText();
         List<String> tags = questionQueryRequest.getTags();
         Long questionBankId = questionQueryRequest.getQuestionBankId();
         Long userId = questionQueryRequest.getUserId();
-        // 注意，ES 的起始页为 0
+        // ES 的分页从 0 开始，因此要对当前页 -1
         int current = questionQueryRequest.getCurrent() - 1;
         int pageSize = questionQueryRequest.getPageSize();
         String sortField = questionQueryRequest.getSortField();
         String sortOrder = questionQueryRequest.getSortOrder();
 
-        // 构造查询条件
+        // 2) 构造 ES Bool 查询
         BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-        // 过滤
+        // 基础过滤：逻辑删除数据不参与检索
         boolQueryBuilder.filter(QueryBuilders.termQuery("isDelete", 0));
         if (id != null) {
             boolQueryBuilder.filter(QueryBuilders.termQuery("id", id));
@@ -282,49 +282,75 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         if (userId != null) {
             boolQueryBuilder.filter(QueryBuilders.termQuery("userId", userId));
         }
+        // 动静分离：
+        // 题库与题目的关系表是高频变更关系，不直接塞进 ES 文档，
+        // 检索时先查 DB 关系表拿到题目 id，再作为 terms 过滤条件约束 ES。
         if (questionBankId != null) {
-            boolQueryBuilder.filter(QueryBuilders.termQuery("questionBankId", questionBankId));
+            LambdaQueryWrapper<QuestionBankQuestion> relationQueryWrapper = Wrappers.lambdaQuery(QuestionBankQuestion.class)
+                    .select(QuestionBankQuestion::getQuestionId)
+                    .eq(QuestionBankQuestion::getQuestionBankId, questionBankId);
+
+            List<Long> questionIdList = questionBankQuestionService.listObjs(relationQueryWrapper, obj -> (Long) obj);
+            if (CollUtil.isEmpty(questionIdList)) {
+                return new Page<>(questionQueryRequest.getCurrent(), questionQueryRequest.getPageSize(), 0);
+            }
+            boolQueryBuilder.filter(QueryBuilders.termsQuery("id", questionIdList));
         }
-        // 必须包含所有标签
+        // 标签过滤：每个 tag 都使用 filter，相当于“必须全部命中”
         if (CollUtil.isNotEmpty(tags)) {
             for (String tag : tags) {
                 boolQueryBuilder.filter(QueryBuilders.termQuery("tags", tag));
             }
         }
-        // 按关键词检索
+        // 全文检索：title / content / answer 任一字段匹配即召回
         if (StringUtils.isNotBlank(searchText)) {
-            // title = '' or content = '' or answer = ''
             boolQueryBuilder.should(QueryBuilders.matchQuery("title", searchText));
             boolQueryBuilder.should(QueryBuilders.matchQuery("content", searchText));
             boolQueryBuilder.should(QueryBuilders.matchQuery("answer", searchText));
             boolQueryBuilder.minimumShouldMatch(1);
         }
-        // 排序
+        // 3) 排序策略
+        // 默认按相关性分数排序；若前端传了排序字段，则按字段排序
         SortBuilder<?> sortBuilder = SortBuilders.scoreSort();
         if (StringUtils.isNotBlank(sortField)) {
             sortBuilder = SortBuilders.fieldSort(sortField);
             sortBuilder.order(CommonConstant.SORT_ORDER_ASC.equals(sortOrder) ? SortOrder.ASC : SortOrder.DESC);
         }
-        // 分页
+        // 4) 分页 + 执行查询
         PageRequest pageRequest = PageRequest.of(current, pageSize);
-        // 构造查询
         NativeSearchQuery searchQuery = new NativeSearchQueryBuilder()
                 .withQuery(boolQueryBuilder)
                 .withPageable(pageRequest)
                 .withSorts(sortBuilder)
                 .build();
         SearchHits<QuestionEsDTO> searchHits = elasticsearchRestTemplate.search(searchQuery, QuestionEsDTO.class);
-        // 复用 MySQL / MyBatis Plus 的分页对象，封装返回结果
-        Page<Question> page = new Page<>();
-        page.setTotal(searchHits.getTotalHits());
-        List<Question> resourceList = new ArrayList<>();
-        if (searchHits.hasSearchHits()) {
-            List<SearchHit<QuestionEsDTO>> searchHitList = searchHits.getSearchHits();
-            for (SearchHit<QuestionEsDTO> questionEsDTOSearchHit : searchHitList) {
-                resourceList.add(QuestionEsDTO.dtoToObj(questionEsDTOSearchHit.getContent()));
-            }
+        Page<Question> page = new Page<>(questionQueryRequest.getCurrent(), questionQueryRequest.getPageSize(), searchHits.getTotalHits());
+        if (!searchHits.hasSearchHits()) {
+            return page;
         }
-        page.setRecords(resourceList);
+
+        // 5) 动静分离核心：
+        // ES 只负责召回 id（静态/检索友好字段），
+        // 返回前再去 MySQL 按 id 批量取最新实体（动态/高频变更字段以 DB 为准）
+        List<Long> questionIdList = searchHits.getSearchHits().stream()
+                .map(searchHit -> searchHit.getContent().getId())
+                .collect(Collectors.toList());
+        List<Question> questionList = this.listByIds(questionIdList);
+        Map<Long, Question> questionIdQuestionMap = questionList.stream()
+                .collect(Collectors.toMap(Question::getId, question -> question, (left, right) -> left));
+        // 这里按 ES 命中顺序组装最终结果，避免 listByIds 打乱排序
+        List<Question> latestQuestionList = new ArrayList<>(questionIdList.size());
+        for (Long questionId : questionIdList) {
+            Question latestQuestion = questionIdQuestionMap.get(questionId);
+            if (latestQuestion != null) {
+                latestQuestionList.add(latestQuestion);
+                continue;
+            }
+            // 清理 ES 中存在、DB 中不存在的脏数据
+            String deleteResult = elasticsearchRestTemplate.delete(String.valueOf(questionId), QuestionEsDTO.class);
+            log.info("delete dirty es question {}, result {}", questionId, deleteResult);
+        }
+        page.setRecords(latestQuestionList);
         return page;
     }
 
@@ -425,8 +451,6 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     }
 
 }
-
-
 
 
 

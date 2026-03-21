@@ -11,7 +11,6 @@ import com.alibaba.csp.sentinel.Tracer;
 import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.alibaba.csp.sentinel.slots.block.degrade.DegradeException;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.yupi.mianshiya.annotation.AuthCheck;
 import com.yupi.mianshiya.common.BaseResponse;
 import com.yupi.mianshiya.common.DeleteRequest;
 import com.yupi.mianshiya.common.ErrorCode;
@@ -21,10 +20,8 @@ import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
 import com.yupi.mianshiya.manager.CounterManager;
 import com.yupi.mianshiya.model.dto.question.*;
-import com.yupi.mianshiya.model.dto.questionBank.QuestionBankQueryRequest;
 import com.yupi.mianshiya.model.entity.Question;
 import com.yupi.mianshiya.model.entity.User;
-import com.yupi.mianshiya.model.vo.QuestionBankVO;
 import com.yupi.mianshiya.model.vo.QuestionVO;
 import com.yupi.mianshiya.sentinel.SentinelConstant;
 import com.yupi.mianshiya.service.QuestionService;
@@ -39,7 +36,18 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 题目接口
+ * 题目控制器（刷题平台最核心的业务控制器）。
+ *
+ * 主要职责：
+ * 1) 提供题目 CRUD 与分页查询；
+ * 2) 提供 ES 搜索入口，并在 ES 异常时自动降级到 MySQL；
+ * 3) 提供管理员批量删除、AI 生成题目等扩展能力；
+ * 4) 接入 Sentinel / 频控管理器，对高频访问做防刷与保护。
+ *
+ * 说明：
+ * - 题目检索是性能关键路径，控制器会优先引导到 ES；
+ * - 题目详情与列表返回 VO，由 Service 统一封装用户信息等扩展字段；
+ * - 权限策略：普通用户可读，写操作按“本人或管理员”校验。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://www.code-nav.cn">编程导航学习圈</a>
@@ -360,14 +368,22 @@ public class QuestionController {
     @PostMapping("/search/page/vo")
     public BaseResponse<Page<QuestionVO>> searchQuestionVOByPage(@RequestBody QuestionQueryRequest questionQueryRequest,
                                                                  HttpServletRequest request) {
+        ThrowUtils.throwIf(questionQueryRequest == null, ErrorCode.PARAMS_ERROR);
         long size = questionQueryRequest.getPageSize();
         // 限制爬虫
         ThrowUtils.throwIf(size > 200, ErrorCode.PARAMS_ERROR);
-        // todo 取消注释开启 ES（须先配置 ES）
-        // 查询 ES
-        // Page<Question> questionPage = questionService.searchFromEs(questionQueryRequest);
-        // 查询数据库（作为没有 ES 的降级方案）
-        Page<Question> questionPage = questionService.listQuestionByPage(questionQueryRequest);
+        // 统一在 Controller 层做“主链路 + 降级链路”编排：
+        // 1) 优先走 ES，获得更好的全文检索能力与查询性能
+        // 2) ES 异常时自动降级到 MySQL，保证用户侧接口可用
+        Page<Question> questionPage;
+        try {
+            // 优先走 ES 检索
+            questionPage = questionService.searchFromEs(questionQueryRequest);
+        } catch (Exception e) {
+            // ES 不可用时自动降级到 MySQL，保证接口可用
+            log.error("search from es failed, fallback to mysql", e);
+            questionPage = questionService.listQuestionByPage(questionQueryRequest);
+        }
         return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
     }
 

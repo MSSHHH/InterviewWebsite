@@ -17,7 +17,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 帖子点赞接口
+ * 帖子点赞控制器。
+ *
+ * 主要职责：
+ * 1) 处理“点赞 / 取消点赞”切换请求；
+ * 2) 对外返回本次操作影响数量（+1 / -1 / 0）；
+ * 3) 在接入层保证参数有效且用户已登录。
+ *
+ * 说明：
+ * - 点赞统计是高频操作，控制器只做参数与鉴权；
+ * - 并发安全、重复点击去重等策略在 Service 层实现。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航知识星球</a>

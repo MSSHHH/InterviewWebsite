@@ -14,17 +14,20 @@ import java.io.Serializable;
 public class MockInterviewEventRequest implements Serializable {
 
     /**
-     * 事件类型
+     * 事件类型（取值：start / chat / end）。
+     * - start：开始面试
+     * - chat：继续对话
+     * - end：结束面试并输出总结
      */
     private String event;
 
     /**
-     * 消息内容
+     * 用户消息内容（event=chat 时必填）。
      */
     private String message;
 
     /**
-     * 房间 ID
+     * 模拟面试会话 id（即 mockInterview.id）。
      */
     private Long id;
 

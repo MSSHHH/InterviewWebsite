@@ -5,6 +5,7 @@ import com.alibaba.csp.sentinel.datasource.*;
 import com.alibaba.csp.sentinel.slots.block.degrade.DegradeRule;
 import com.alibaba.csp.sentinel.slots.block.degrade.DegradeRuleManager;
 import com.alibaba.csp.sentinel.slots.block.degrade.circuitbreaker.CircuitBreakerStrategy;
+import com.alibaba.csp.sentinel.slots.block.RuleConstant;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRule;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRuleManager;
 import com.alibaba.csp.sentinel.slots.block.flow.param.ParamFlowRule;
@@ -40,19 +41,25 @@ public class SentinelRulesManager {
      * 初始化限流规则
      */
     public void initFlowRules() {
-        // 单 IP 查看题目列表限流规则
-        ParamFlowRule rule = new ParamFlowRule(SentinelConstant.listQuestionVOByPage)
+        // 单 IP 查看题目列表限流规则（热点参数限流）
+        ParamFlowRule questionParamRule = new ParamFlowRule(SentinelConstant.listQuestionVOByPage)
                 .setParamIdx(0) // 对第 0 个参数限流，即 IP 地址
                 .setCount(60) // 每分钟最多 60 次
                 .setDurationInSec(60); // 规则的统计周期为 60 秒
-        ParamFlowRuleManager.loadRules(Collections.singletonList(rule));
+        ParamFlowRuleManager.loadRules(Collections.singletonList(questionParamRule));
+
+        // 题库分页列表限流规则（注解资源限流）
+        FlowRule questionBankListFlowRule = new FlowRule(SentinelConstant.listQuestionBankVOByPage)
+                .setGrade(RuleConstant.FLOW_GRADE_QPS)
+                .setCount(30);
+        FlowRuleManager.loadRules(Collections.singletonList(questionBankListFlowRule));
     }
 
     /**
      * 初始化降级规则
      */
     public void initDegradeRules() {
-        // 单 IP 查看题目列表熔断规则
+        // 题目列表熔断规则（慢调用比例 + 异常比例）
         DegradeRule slowCallRule = new DegradeRule(SentinelConstant.listQuestionVOByPage)
                 .setGrade(CircuitBreakerStrategy.SLOW_REQUEST_RATIO.getType())
                 .setCount(0.2) // 慢调用比例大于 20%
@@ -68,8 +75,16 @@ public class SentinelRulesManager {
                 .setStatIntervalMs(30 * 1000) // 统计时长 30 秒
                 .setMinRequestAmount(10); // 最小请求数
 
+        // 题库分页列表熔断规则（重点对异常率降级并返回本地缓存）
+        DegradeRule questionBankErrorRateRule = new DegradeRule(SentinelConstant.listQuestionBankVOByPage)
+                .setGrade(CircuitBreakerStrategy.ERROR_RATIO.getType())
+                .setCount(0.1)
+                .setTimeWindow(60)
+                .setStatIntervalMs(30 * 1000)
+                .setMinRequestAmount(10);
+
         // 加载规则
-        DegradeRuleManager.loadRules(Arrays.asList(slowCallRule, errorRateRule));
+        DegradeRuleManager.loadRules(Arrays.asList(slowCallRule, errorRateRule, questionBankErrorRateRule));
     }
 
     /**

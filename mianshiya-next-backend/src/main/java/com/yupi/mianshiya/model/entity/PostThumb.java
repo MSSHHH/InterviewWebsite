@@ -9,7 +9,10 @@ import java.util.Date;
 import lombok.Data;
 
 /**
- * 帖子点赞
+ * 帖子点赞明细实体（post_thumb 表）。
+ *
+ * 一条记录代表“某用户点赞了某帖子”。
+ * 与 post.thumbNum 配合：本表记录行为明细，post 表保存聚合计数。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航知识星球</a>
@@ -19,28 +22,28 @@ import lombok.Data;
 public class PostThumb implements Serializable {
 
     /**
-     * id
+     * 主键 id。
      */
     @TableId(type = IdType.AUTO)
     private Long id;
 
     /**
-     * 帖子 id
+     * 帖子 id（关联 post.id）。
      */
     private Long postId;
 
     /**
-     * 创建用户 id
+     * 点赞用户 id（谁点了赞）。
      */
     private Long userId;
 
     /**
-     * 创建时间
+     * 点赞操作时间。
      */
     private Date createTime;
 
     /**
-     * 更新时间
+     * 记录更新时间。
      */
     private Date updateTime;
 

@@ -33,7 +33,18 @@ import java.util.List;
 import static com.yupi.mianshiya.service.impl.UserServiceImpl.SALT;
 
 /**
- * 用户接口
+ * 用户控制器（账户体系统一入口）。
+ *
+ * 主要职责：
+ * 1) 登录 / 注册 / 退出等认证流程；
+ * 2) 当前登录用户信息获取与个人资料维护；
+ * 3) 管理员侧用户分页查询、修改、删除；
+ * 4) 对接微信开放平台 OAuth 登录。
+ *
+ * 设计说明：
+ * - 控制层负责参数校验与会话边界；
+ * - 密码加密、角色判定、登录态写入等核心逻辑在 Service 中统一处理；
+ * - 管理员能力和普通用户能力通过不同接口隔离，降低误用风险。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航知识星球</a>

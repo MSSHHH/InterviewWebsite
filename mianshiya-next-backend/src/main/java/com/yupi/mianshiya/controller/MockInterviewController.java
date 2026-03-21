@@ -25,7 +25,20 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 
 /**
- * 模拟面试接口
+ * 模拟面试控制器（AI 对话式面试主入口）。
+ *
+ * 主要职责：
+ * 1) 创建 / 删除 / 查询模拟面试房间；
+ * 2) 接收面试事件并交给 Service 处理状态机流转；
+ * 3) 统一做登录态与权限校验，保证用户只能操作自己的面试记录。
+ *
+ * 事件流转约定：
+ * - start：开始面试，初始化系统消息与首轮提问；
+ * - chat：用户继续答题，AI 追问或反馈；
+ * - end：结束面试，生成总结并封存记录。
+ *
+ * 控制器不直接拼接 Prompt，也不保存消息细节，
+ * 这些都放在 Service 层，便于后续替换模型或优化提示词策略。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://www.code-nav.cn">编程导航学习圈</a>

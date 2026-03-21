@@ -15,17 +15,17 @@ import lombok.EqualsAndHashCode;
 @Data
 public class UserQueryRequest extends PageRequest implements Serializable {
     /**
-     * id
+     * 用户 id（精确查询）。
      */
     private Long id;
 
     /**
-     * 开放平台id
+     * 微信开放平台 unionId（跨应用唯一标识）。
      */
     private String unionId;
 
     /**
-     * 公众号openId
+     * 微信公众号 openId（公众号内唯一标识）。
      */
     private String mpOpenId;
 
@@ -35,7 +35,7 @@ public class UserQueryRequest extends PageRequest implements Serializable {
     private String userName;
 
     /**
-     * 简介
+     * 用户简介（支持模糊查询）。
      */
     private String userProfile;
 

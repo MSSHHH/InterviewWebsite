@@ -17,6 +17,6 @@ public interface RedisConstant {
      * @return 拼接好的 Redis Key
      */
     static String getUserSignInRedisKey(int year, long userId) {
-        return String.format("%s:%s:%S", USER_SIGN_IN_REDIS_KEY_PREFIX, year, userId);
+        return String.format("%s:%s:%s", USER_SIGN_IN_REDIS_KEY_PREFIX, year, userId);
     }
 }

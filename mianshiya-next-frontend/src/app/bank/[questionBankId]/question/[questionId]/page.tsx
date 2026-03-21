@@ -1,5 +1,4 @@
-"use server";
-import { Flex, Menu, message } from "antd";
+import { Flex, Menu } from "antd";
 import { getQuestionBankVoByIdUsingGet } from "@/api/questionBankController";
 import Title from "antd/es/typography/Title";
 import { getQuestionVoByIdUsingGet } from "@/api/questionController";

@@ -32,7 +32,17 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 帖子接口
+ * 帖子内容控制器。
+ *
+ * 主要职责：
+ * 1) 提供帖子 CRUD（新增、删除、编辑、分页查询）；
+ * 2) 提供帖子详情与分页 VO 封装返回；
+ * 3) 提供 ES 搜索入口（对外屏蔽底层检索实现细节）；
+ * 4) 在控制层完成基础参数校验与权限校验（本人 / 管理员）。
+ *
+ * 设计说明：
+ * - 点赞、收藏能力拆分到独立控制器，保持帖子主体接口简洁；
+ * - 标签在入库前转换为 JSON 字符串，避免前后端结构不一致。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航知识星球</a>

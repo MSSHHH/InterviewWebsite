@@ -24,7 +24,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 帖子收藏接口
+ * 帖子收藏控制器。
+ *
+ * 主要职责：
+ * 1) 执行“收藏 / 取消收藏”切换操作；
+ * 2) 查询当前用户收藏过的帖子分页数据；
+ * 3) 在控制层保障登录态，并将当前用户信息透传到 Service。
+ *
+ * 说明：
+ * - 收藏状态切换是幂等业务，真正的数据一致性控制在 Service / DB 层处理；
+ * - 与点赞控制器拆分，便于独立扩展收藏夹、推荐等能力。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://yupi.icu">编程导航知识星球</a>

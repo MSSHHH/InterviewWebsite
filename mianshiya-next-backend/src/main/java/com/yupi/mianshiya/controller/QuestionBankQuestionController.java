@@ -27,7 +27,16 @@ import javax.servlet.http.HttpServletRequest;
 import java.util.List;
 
 /**
- * 题库题目关联接口
+ * 题库-题目关联控制器。
+ *
+ * 主要职责：
+ * 1) 维护题库与题目之间的多对多关系；
+ * 2) 支持单个新增 / 删除、批量新增 / 批量移除；
+ * 3) 提供关联关系分页查询，便于后台管理审计。
+ *
+ * 说明：
+ * - 该控制器只维护“关系”，不负责题目与题库主体内容的编辑；
+ * - 批量接口用于降低管理端频繁点击带来的网络与数据库开销。
  *
  * @author <a href="https://github.com/liyupi">程序员鱼皮</a>
  * @from <a href="https://www.code-nav.cn">编程导航学习圈</a>
@@ -272,7 +281,6 @@ public class QuestionBankQuestionController {
         return ResultUtils.success(true);
     }
 }
-
 
 
 

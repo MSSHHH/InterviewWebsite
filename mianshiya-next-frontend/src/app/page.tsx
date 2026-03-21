@@ -1,5 +1,5 @@
 import Title from "antd/es/typography/Title";
-import { Divider, Flex, message } from "antd";
+import { Divider, Flex } from "antd";
 import Link from "next/link";
 import { listQuestionBankVoByPageUsingPost } from "@/api/questionBankController";
 import { listQuestionVoByPageUsingPost } from "@/api/questionController";
@@ -25,7 +25,7 @@ export default async function HomePage() {
     });
     questionBankList = res.data.records ?? [];
   } catch (e) {
-    message.error("获取题库列表失败，" + e.message);
+    console.error("获取题库列表失败", e);
   }
 
   try {
@@ -36,7 +36,7 @@ export default async function HomePage() {
     });
     questionList = res.data.records ?? [];
   } catch (e) {
-    message.error("获取题目列表失败，" + e.message);
+    console.error("获取题目列表失败", e);
   }
 
   return (

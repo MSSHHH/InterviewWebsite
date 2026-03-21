@@ -1,6 +1,4 @@
-"use server";
 import Title from "antd/es/typography/Title";
-import { message } from "antd";
 import { listQuestionBankVoByPageUsingPost } from "@/api/questionBankController";
 import QuestionBankList from "@/components/QuestionBankList";
 import "./index.css";
@@ -21,7 +19,7 @@ export default async function BanksPage() {
     });
     questionBankList = res.data.records ?? [];
   } catch (e) {
-    message.error("获取题库列表失败，" + e.message);
+    console.error("获取题库列表失败", e);
   }
 
   return (

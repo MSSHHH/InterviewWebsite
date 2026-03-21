@@ -17,12 +17,12 @@ import java.io.Serializable;
 public class QuestionBankQuestionQueryRequest extends PageRequest implements Serializable {
 
     /**
-     * id
+     * 关联记录 id（精确查询）。
      */
     private Long id;
 
     /**
-     * id
+     * 排除的关联记录 id。
      */
     private Long notId;
 
@@ -37,7 +37,7 @@ public class QuestionBankQuestionQueryRequest extends PageRequest implements Ser
     private Long questionId;
 
     /**
-     * 创建用户 id
+     * 创建该关联关系的用户 id（审计 / 过滤场景）。
      */
     private Long userId;
 

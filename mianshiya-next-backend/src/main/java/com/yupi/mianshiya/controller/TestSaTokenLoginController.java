@@ -5,7 +5,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 测试 Sa-Token 框架实现用户登录
+ * Sa-Token 登录演示控制器（仅用于本地调试 / 教学演示）。
+ *
+ * 注意：
+ * - 该控制器使用硬编码账号密码，仅用于验证认证流程是否打通；
+ * - 生产环境不应依赖该控制器，真实登录必须走 UserController + 数据库校验。
  */
 @RestController
 @RequestMapping("/test/user")

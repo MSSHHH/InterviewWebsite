@@ -16,7 +16,11 @@ import java.util.List;
 public interface QuestionMapper extends BaseMapper<Question> {
 
     /**
-     * 查询题目列表（包括已被删除的数据）
+     * 查询指定时间点之后发生变更的题目（包含逻辑删除）。
+     *
+     * 说明：
+     * - 这里故意不加 isDelete = 0 过滤，目的是让“删除状态”也能同步到 ES；
+     * - 供定时增量同步任务调用，按 updateTime 做窗口拉取。
      */
     @Select("select * from question where updateTime >= #{minUpdateTime}")
     List<Question> listQuestionWithDelete(Date minUpdateTime);

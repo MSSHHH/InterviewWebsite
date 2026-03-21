@@ -1,0 +1,10 @@
+# local nacos config for mianshiya-next-backend
+spring:
+  cloud:
+    sentinel:
+      transport:
+        dashboard: localhost:8858
+hotkey:
+  etcd-server: http://localhost:2379
+nacos:
+  status: ready
