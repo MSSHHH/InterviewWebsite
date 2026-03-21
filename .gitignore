@@ -145,3 +145,22 @@ fabric.properties
 # Android studio 3.1+ serialized cache file
 .idea/caches/build_file_checksums.ser
 
+### Local runtime artifacts
+logs/
+output/logs/
+*.pid
+*.out
+derby.log
+
+### Service runtime logs
+sentinel/*.log
+sentinel/*.pid
+hotkey/*.log
+hotkey/*.pid
+nacos/nacos/logs/
+
+### Nacos local runtime data
+nacos/nacos/data/derby-data/
+nacos/nacos/data/protocol/raft/**/log/
+nacos/nacos/data/protocol/raft/**/snapshot/
+nacos/nacos/data/protocol/raft/**/meta-data/

@@ -1,8 +1,0 @@
-2026-03-19 01:46:20,974 INFO [dump] add formal task. groupKey=mianshiya+DEFAULT_GROUP
-
-2026-03-19 01:46:21,086 INFO [dump] process formal task. groupKey=mianshiya+DEFAULT_GROUP
-
-2026-03-19 01:46:21,092 INFO [dump] md5 changed, save to disk cache ,groupKey=mianshiya+DEFAULT_GROUP, newMd5=10822fab00bf0caca0650558f520b7a8,oldMd5=
-
-2026-03-19 01:46:21,093 INFO [dump] md5 changed, update md5 and timestamp in jvm cache ,groupKey=mianshiya+DEFAULT_GROUP, newMd5=10822fab00bf0caca0650558f520b7a8,oldMd5=,lastModifiedTs=1773855980937
-
