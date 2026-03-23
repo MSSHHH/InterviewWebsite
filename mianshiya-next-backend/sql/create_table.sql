@@ -50,6 +50,7 @@ create table if not exists question
     content    text                               null comment '内容',
     tags       varchar(1024)                      null comment '标签列表（json 数组）',
     answer     text                               null comment '推荐答案',
+    difficulty varchar(20) default 'medium'       not null comment '题目难度（easy / medium / hard）',
     userId     bigint                             not null comment '创建用户 id',
     editTime   datetime default CURRENT_TIMESTAMP not null comment '编辑时间',
     createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
@@ -87,7 +88,10 @@ create table if not exists mock_interview
     workExperience varchar(256)                       not null comment '工作年限',
     jobPosition    varchar(256)                       not null comment '工作岗位',
     difficulty     varchar(50)                        not null comment '面试难度',
+    topic          varchar(256)                       not null comment '面试方向',
+    questionBankId bigint                             null comment '绑定题库 id',
     messages       mediumtext                         null comment '消息列表（JSON 对象数组字段，同时包括了总结）',
+    report         mediumtext                         null comment '结构化面试报告（JSON）',
     status         int      default 0                 not null comment '状态（0-待开始、1-进行中、2-已结束）',
     userId         bigint                             not null comment '创建人（用户 id）',
     createTime     datetime default CURRENT_TIMESTAMP not null comment '创建时间',
@@ -95,3 +99,19 @@ create table if not exists mock_interview
     isDelete       tinyint  default 0                 not null comment '是否删除（逻辑删除）',
     index idx_userId (userId)
 ) comment '模拟面试' collate = utf8mb4_unicode_ci;
+
+ALTER TABLE question
+    ADD COLUMN IF NOT EXISTS difficulty VARCHAR(20) NOT NULL DEFAULT 'medium' COMMENT '题目难度（easy / medium / hard）';
+
+UPDATE question
+SET difficulty = 'medium'
+WHERE difficulty IS NULL OR difficulty = '';
+
+ALTER TABLE mock_interview
+    ADD COLUMN IF NOT EXISTS topic VARCHAR(256) NOT NULL DEFAULT '' COMMENT '面试方向';
+
+ALTER TABLE mock_interview
+    ADD COLUMN IF NOT EXISTS report MEDIUMTEXT NULL COMMENT '结构化面试报告（JSON）';
+
+ALTER TABLE mock_interview
+    ADD COLUMN IF NOT EXISTS questionBankId BIGINT NULL COMMENT '绑定题库 id';

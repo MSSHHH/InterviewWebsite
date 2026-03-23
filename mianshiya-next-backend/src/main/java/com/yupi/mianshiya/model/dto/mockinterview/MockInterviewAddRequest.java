@@ -28,5 +28,15 @@ public class MockInterviewAddRequest implements Serializable {
      */
     private String difficulty;
 
+    /**
+     * 面试方向
+     */
+    private String topic;
+
+    /**
+     * 题库 id
+     */
+    private Long questionBankId;
+
     private static final long serialVersionUID = 1L;
 }

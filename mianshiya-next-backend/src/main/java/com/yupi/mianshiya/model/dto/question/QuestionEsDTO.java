@@ -66,6 +66,12 @@ public class QuestionEsDTO implements Serializable {
     private Long userId;
 
     /**
+     * 题目难度（精确过滤）。
+     */
+    @Field(type = FieldType.Keyword)
+    private String difficulty;
+
+    /**
      * 创建时间
      */
     @Field(type = FieldType.Date, format = {}, pattern = DATE_TIME_PATTERN)

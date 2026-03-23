@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Card, Spin } from "antd";
 import Title from "antd/es/typography/Title";
 import { listQuestionBankVoByPageUsingPost } from "@/api/questionBankController";
 import QuestionBankList from "@/components/QuestionBankList";
@@ -7,25 +11,40 @@ import "./index.css";
  * 题库列表页面
  * @constructor
  */
-export default async function BanksPage() {
-  let questionBankList = [];
-  // 题库数量不多，直接全量获取
-  const pageSize = 200;
-  try {
-    const res = await listQuestionBankVoByPageUsingPost({
-      pageSize,
-      sortField: "createTime",
-      sortOrder: "descend",
-    });
-    questionBankList = res.data.records ?? [];
-  } catch (e) {
-    console.error("获取题库列表失败", e);
-  }
+export default function BanksPage() {
+  const [questionBankList, setQuestionBankList] = useState<API.QuestionBankVO[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchBankList = async () => {
+      setLoading(true);
+      try {
+        const res = (await listQuestionBankVoByPageUsingPost({
+          pageSize: 200,
+          sortField: "createTime",
+          sortOrder: "descend",
+        })) as API.BaseResponsePageQuestionBankVO_;
+        setQuestionBankList(res.data?.records ?? []);
+      } catch (e: any) {
+        console.error("获取题库列表失败", e.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBankList();
+  }, []);
 
   return (
     <div id="banksPage" className="max-width-content">
       <Title level={3}>题库大全</Title>
-      <QuestionBankList questionBankList={questionBankList} />
+      {loading ? (
+        <Card>
+          <Spin />
+        </Card>
+      ) : (
+        <QuestionBankList questionBankList={questionBankList} />
+      )}
     </div>
   );
 }

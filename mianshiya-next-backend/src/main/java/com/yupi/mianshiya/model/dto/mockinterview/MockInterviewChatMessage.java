@@ -25,4 +25,19 @@ public class MockInterviewChatMessage implements Serializable {
      */
     private String message;
 
+    /**
+     * 关联题目 id
+     */
+    private Long questionId;
+
+    /**
+     * 关联题目标题
+     */
+    private String questionTitle;
+
+    /**
+     * 最近一次命中的工具名
+     */
+    private String toolName;
+
 }

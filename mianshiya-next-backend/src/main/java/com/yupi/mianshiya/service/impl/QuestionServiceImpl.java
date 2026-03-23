@@ -8,16 +8,23 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.constant.CommonConstant;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
 import com.yupi.mianshiya.manager.AiManager;
+import com.yupi.mianshiya.model.dto.ai.AiToolChatResult;
+import com.yupi.mianshiya.model.dto.question.GeneratedQuestionBatch;
+import com.yupi.mianshiya.model.dto.question.GeneratedQuestionItem;
 import com.yupi.mianshiya.mapper.QuestionMapper;
 import com.yupi.mianshiya.model.dto.question.QuestionEsDTO;
 import com.yupi.mianshiya.model.dto.question.QuestionQueryRequest;
 import com.yupi.mianshiya.model.entity.Question;
 import com.yupi.mianshiya.model.entity.QuestionBankQuestion;
+import com.yupi.mianshiya.model.enums.QuestionDifficultyEnum;
 import com.yupi.mianshiya.model.entity.User;
 import com.yupi.mianshiya.model.vo.QuestionVO;
 import com.yupi.mianshiya.model.vo.UserVO;
@@ -41,6 +48,10 @@ import org.springframework.data.elasticsearch.core.query.NativeSearchQuery;
 import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
+import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
+import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
+import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
@@ -57,6 +68,14 @@ import java.util.stream.Collectors;
 @Slf4j
 public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> implements QuestionService {
 
+    private static final String AI_GENERATE_QUESTION_TOOL_NAME = "submit_generated_questions";
+
+    private static final String AI_REVIEW_TAG = "[\"待审核\"]";
+
+    private static final int AI_GENERATE_TOOL_MAX_ATTEMPTS = 2;
+
+    private static final String DEFAULT_QUESTION_DIFFICULTY = QuestionDifficultyEnum.MEDIUM.getValue();
+
     @Resource
     private UserService userService;
 
@@ -68,6 +87,9 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
 
     @Resource
     private AiManager aiManager;
+
+    @Resource
+    private ObjectMapper objectMapper;
 
     /**
      * 校验数据
@@ -81,10 +103,12 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         // todo 从对象中取值
         String title = question.getTitle();
         String content = question.getContent();
+        String difficulty = question.getDifficulty();
         // 创建数据时，参数不能为空
         if (add) {
             // todo 补充校验规则
             ThrowUtils.throwIf(StringUtils.isBlank(title), ErrorCode.PARAMS_ERROR);
+            ThrowUtils.throwIf(StringUtils.isBlank(difficulty), ErrorCode.PARAMS_ERROR, "题目难度不能为空");
         }
         // 修改数据时，有参数则校验
         // todo 补充校验规则
@@ -93,6 +117,9 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         }
         if (StringUtils.isNotBlank(content)) {
             ThrowUtils.throwIf(content.length() > 10240, ErrorCode.PARAMS_ERROR, "内容过长");
+        }
+        if (StringUtils.isNotBlank(difficulty)) {
+            ThrowUtils.throwIf(!QuestionDifficultyEnum.isValid(difficulty), ErrorCode.PARAMS_ERROR, "题目难度非法");
         }
     }
 
@@ -119,6 +146,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         List<String> tagList = questionQueryRequest.getTags();
         Long userId = questionQueryRequest.getUserId();
         String answer = questionQueryRequest.getAnswer();
+        String difficulty = questionQueryRequest.getDifficulty();
         // MySQL 查询场景：使用 like 实现模糊匹配
         // 这里保留这段逻辑，作为 ES 不可用时的兜底能力
         if (StringUtils.isNotBlank(searchText)) {
@@ -139,9 +167,10 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         queryWrapper.ne(ObjectUtils.isNotEmpty(notId), "id", notId);
         queryWrapper.eq(ObjectUtils.isNotEmpty(id), "id", id);
         queryWrapper.eq(ObjectUtils.isNotEmpty(userId), "userId", userId);
+        queryWrapper.eq(StringUtils.isNotBlank(difficulty), "difficulty", difficulty);
         // 排序规则（先校验字段合法性，防止恶意注入）
         queryWrapper.orderBy(SqlUtils.validSortField(sortField),
-                sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
+                CommonConstant.SORT_ORDER_ASC.equals(sortOrder),
                 sortField);
         return queryWrapper;
     }
@@ -263,6 +292,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         List<String> tags = questionQueryRequest.getTags();
         Long questionBankId = questionQueryRequest.getQuestionBankId();
         Long userId = questionQueryRequest.getUserId();
+        String difficulty = questionQueryRequest.getDifficulty();
         // ES 的分页从 0 开始，因此要对当前页 -1
         int current = questionQueryRequest.getCurrent() - 1;
         int pageSize = questionQueryRequest.getPageSize();
@@ -281,6 +311,9 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         }
         if (userId != null) {
             boolQueryBuilder.filter(QueryBuilders.termQuery("userId", userId));
+        }
+        if (StringUtils.isNotBlank(difficulty)) {
+            boolQueryBuilder.filter(QueryBuilders.termQuery("difficulty", difficulty));
         }
         // 动静分离：
         // 题库与题目的关系表是高频变更关系，不直接塞进 ES 文档，
@@ -323,7 +356,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
                 .withPageable(pageRequest)
                 .withSorts(sortBuilder)
                 .build();
-        SearchHits<QuestionEsDTO> searchHits = elasticsearchRestTemplate.search(searchQuery, QuestionEsDTO.class);
+        SearchHits<QuestionEsDTO> searchHits = elasticsearchRestTemplate.search(searchQuery , QuestionEsDTO.class);
         Page<Question> page = new Page<>(questionQueryRequest.getCurrent(), questionQueryRequest.getPageSize(), searchHits.getTotalHits());
         if (!searchHits.hasSearchHits()) {
             return page;
@@ -384,47 +417,177 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
      * @return ture / false
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public boolean aiGenerateQuestions(String questionType, int number, User user) {
         if (ObjectUtil.hasEmpty(questionType, number, user)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "参数错误");
         }
-        // 1. 定义系统 Prompt
-        String systemPrompt = "你是一位专业的程序员面试官，你要帮我生成 {数量} 道 {方向} 面试题，要求输出格式如下：\n" +
-                "\n" +
-                "1. 什么是 Java 中的反射？\n" +
-                "2. Java 8 中的 Stream API 有什么作用？\n" +
-                "3. xxxxxx\n" +
-                "\n" +
-                "除此之外，请不要输出任何多余的内容，不要输出开头、也不要输出结尾，只输出上面的列表。\n" +
-                "\n" +
-                "接下来我会给你要生成的题目{数量}、以及题目{方向}\n";
-        // 2. 拼接用户 Prompt
-        String userPrompt = String.format("题目数量：%s, 题目方向：%s", number, questionType);
-        // 3. 调用 AI 生成题目
-        String answer = aiManager.doChat(systemPrompt, userPrompt);
-        // 4. 对题目进行预处理
-        // 按行拆分
-        List<String> lines = Arrays.asList(answer.split("\n"));
-        // 移除序号和 `
-        List<String> titleList = lines.stream()
-                .map(line -> StrUtil.removePrefix(line, StrUtil.subBefore(line, " ", false))) // 移除序号
-                .map(line -> line.replace("`", "")) // 移除 `
-                .collect(Collectors.toList());
-        // 5. 保存题目到数据库中
-        List<Question> questionList = titleList.stream().map(title -> {
+        GeneratedQuestionBatch generatedQuestionBatch = generateStructuredQuestions(questionType, number);
+        List<Question> questionList = generatedQuestionBatch.getQuestions().stream().map(generatedQuestionItem -> {
+            String title = StrUtil.trim(generatedQuestionItem.getTitle());
             Question question = new Question();
             question.setTitle(title);
             question.setUserId(user.getId());
-            question.setTags("[\"待审核\"]");
-            // 优化点：可以并发生成
+            question.setTags(AI_REVIEW_TAG);
+            question.setDifficulty(DEFAULT_QUESTION_DIFFICULTY);
             question.setAnswer(aiGenerateQuestionAnswer(title));
+            validQuestion(question, true);
             return question;
         }).collect(Collectors.toList());
         boolean result = this.saveBatch(questionList);
         if (!result) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "保存题目失败");
         }
+        log.info("ai generate questions success, questionType={}, requestedCount={}, savedCount={}, userId={}",
+                questionType, number, questionList.size(), user.getId());
         return true;
+    }
+
+    private GeneratedQuestionBatch generateStructuredQuestions(String questionType, int number) {
+        ChatTool generateQuestionTool = buildGenerateQuestionTool();
+        String systemPrompt = "你是一位专业的程序员面试官，负责生成结构化面试题。\n" +
+                "你必须调用 submit_generated_questions 工具输出结果，不能返回普通文本。\n" +
+                "每道题只保留题目标题，不要附带答案、序号、解释、Markdown 标记或额外说明。\n" +
+                "题目要围绕给定技术方向，语义专业、表述自然、适合作为程序员面试题。";
+        String validationError = null;
+        for (int attempt = 1; attempt <= AI_GENERATE_TOOL_MAX_ATTEMPTS; attempt++) {
+            String userPrompt = buildGenerateQuestionUserPrompt(questionType, number, validationError);
+            AiToolChatResult aiToolChatResult = aiManager.doToolChat(systemPrompt,
+                    userPrompt,
+                    Collections.singletonList(generateQuestionTool),
+                    AI_GENERATE_QUESTION_TOOL_NAME);
+            GeneratedQuestionBatch generatedQuestionBatch = parseGeneratedQuestionBatch(aiToolChatResult);
+            validationError = validateGeneratedQuestionBatch(generatedQuestionBatch, number);
+            boolean toolHit = CollUtil.isNotEmpty(aiToolChatResult.getToolCalls());
+            log.info("ai generate questions tool call, requestId={}, model={}, toolName={}, questionType={}, requestedCount={}, toolHit={}, attempt={}",
+                    aiToolChatResult.getRequestId(),
+                    aiToolChatResult.getModel(),
+                    AI_GENERATE_QUESTION_TOOL_NAME,
+                    questionType,
+                    number,
+                    toolHit,
+                    attempt);
+            if (validationError == null) {
+                normalizeGeneratedQuestionBatch(generatedQuestionBatch);
+                return generatedQuestionBatch;
+            }
+            log.warn("ai generate questions validation failed, requestId={}, toolName={}, questionType={}, requestedCount={}, attempt={}, reason={}",
+                    aiToolChatResult.getRequestId(),
+                    AI_GENERATE_QUESTION_TOOL_NAME,
+                    questionType,
+                    number,
+                    attempt,
+                    validationError);
+        }
+        throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 生成题目失败，结构化结果校验未通过");
+    }
+
+    private String buildGenerateQuestionUserPrompt(String questionType, int number, String validationError) {
+        String prompt = String.format("请生成 %d 道 %s 面试题，并且必须通过 submit_generated_questions 工具一次性返回结构化结果。",
+                number, questionType);
+        if (StrUtil.isBlank(validationError)) {
+            return prompt;
+        }
+        return prompt + String.format(" 上一次返回结果不合法，原因是：%s。请严格修正后重新调用工具。", validationError);
+    }
+
+    private ChatTool buildGenerateQuestionTool() {
+        ObjectNode titleSchema = objectMapper.createObjectNode();
+        titleSchema.put("type", "string");
+        titleSchema.put("description", "面试题标题，只能是单行文本");
+
+        ObjectNode itemSchema = objectMapper.createObjectNode();
+        itemSchema.put("type", "object");
+        itemSchema.put("additionalProperties", false);
+        ObjectNode itemProperties = objectMapper.createObjectNode();
+        itemProperties.set("title", titleSchema);
+        itemSchema.set("properties", itemProperties);
+        ArrayNode itemRequired = objectMapper.createArrayNode();
+        itemRequired.add("title");
+        itemSchema.set("required", itemRequired);
+
+        ObjectNode questionsSchema = objectMapper.createObjectNode();
+        questionsSchema.put("type", "array");
+        questionsSchema.put("description", "结构化面试题列表");
+        questionsSchema.set("items", itemSchema);
+
+        ObjectNode parameters = objectMapper.createObjectNode();
+        parameters.put("type", "object");
+        parameters.put("additionalProperties", false);
+        ObjectNode parameterProperties = objectMapper.createObjectNode();
+        parameterProperties.set("questions", questionsSchema);
+        parameters.set("properties", parameterProperties);
+        ArrayNode required = objectMapper.createArrayNode();
+        required.add("questions");
+        parameters.set("required", required);
+
+        ChatFunction chatFunction = new ChatFunction();
+        chatFunction.setName(AI_GENERATE_QUESTION_TOOL_NAME);
+        chatFunction.setDescription("提交结构化生成的面试题列表");
+        chatFunction.setParameters(parameters);
+
+        ChatTool chatTool = new ChatTool();
+        chatTool.setType("function");
+        chatTool.setFunction(chatFunction);
+        return chatTool;
+    }
+
+    private GeneratedQuestionBatch parseGeneratedQuestionBatch(AiToolChatResult aiToolChatResult) {
+        List<ChatToolCall> toolCalls = aiToolChatResult.getToolCalls();
+        if (CollUtil.isEmpty(toolCalls)) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 未返回工具调用结果");
+        }
+        ChatToolCall matchedToolCall = toolCalls.stream()
+                .filter(toolCall -> toolCall != null && toolCall.getFunction() != null)
+                .filter(toolCall -> AI_GENERATE_QUESTION_TOOL_NAME.equals(toolCall.getFunction().getName()))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.OPERATION_ERROR, "AI 未返回预期工具调用结果"));
+        ChatFunctionCall functionCall = matchedToolCall.getFunction();
+        String arguments = functionCall.getArguments();
+        if (StrUtil.isBlank(arguments)) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 工具调用参数为空");
+        }
+        try {
+            return objectMapper.readValue(arguments, GeneratedQuestionBatch.class);
+        } catch (Exception e) {
+            log.warn("parse generated question batch failed, requestId={}, toolName={}, message={}",
+                    aiToolChatResult.getRequestId(), AI_GENERATE_QUESTION_TOOL_NAME, e.getMessage());
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 工具调用参数解析失败");
+        }
+    }
+
+    private String validateGeneratedQuestionBatch(GeneratedQuestionBatch generatedQuestionBatch, int expectedNumber) {
+        if (generatedQuestionBatch == null || CollUtil.isEmpty(generatedQuestionBatch.getQuestions())) {
+            return "questions 不能为空";
+        }
+        List<GeneratedQuestionItem> generatedQuestionItems = generatedQuestionBatch.getQuestions();
+        if (generatedQuestionItems.size() != expectedNumber) {
+            return String.format("题目数量不正确，期望 %s，实际 %s", expectedNumber, generatedQuestionItems.size());
+        }
+        Set<String> uniqueTitles = new LinkedHashSet<>();
+        for (GeneratedQuestionItem generatedQuestionItem : generatedQuestionItems) {
+            if (generatedQuestionItem == null) {
+                return "questions 中存在空对象";
+            }
+            String title = StrUtil.trim(generatedQuestionItem.getTitle());
+            if (StrUtil.isBlank(title)) {
+                return "题目标题不能为空";
+            }
+            uniqueTitles.add(title);
+        }
+        if (uniqueTitles.size() != expectedNumber) {
+            return "题目标题存在重复";
+        }
+        return null;
+    }
+
+    private void normalizeGeneratedQuestionBatch(GeneratedQuestionBatch generatedQuestionBatch) {
+        List<GeneratedQuestionItem> normalizedQuestionItems = generatedQuestionBatch.getQuestions().stream().map(generatedQuestionItem -> {
+            GeneratedQuestionItem normalizedQuestionItem = new GeneratedQuestionItem();
+            normalizedQuestionItem.setTitle(StrUtil.trim(generatedQuestionItem.getTitle()));
+            return normalizedQuestionItem;
+        }).collect(Collectors.toList());
+        generatedQuestionBatch.setQuestions(normalizedQuestionItems);
     }
 
     /**
@@ -451,7 +614,4 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     }
 
 }
-
-
-
 

@@ -1,2 +1,276 @@
 #homePage {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding-top: 8px;
+}
+
+.home-loading {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.home-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.22fr) minmax(320px, 0.78fr);
+  gap: 44px;
+  align-items: start;
+  padding: 42px 40px 38px;
+}
+
+.home-hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  padding-top: 6px;
+}
+
+.home-hero-topline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.home-brand {
+  margin: 0;
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.home-hero-note {
+  color: var(--muted-text);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.home-hero-copy h1 {
+  max-width: 10ch;
+  margin: 0 !important;
+  font-size: clamp(2.9rem, 5vw, 5.2rem) !important;
+  line-height: 0.98 !important;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.home-hero-copy h1 span {
+  display: block;
+}
+
+.home-hero-copy .ant-typography {
+  max-width: 34rem;
+  margin-bottom: 0;
+  color: var(--muted-text);
+  font-size: 17px;
+  line-height: 1.9;
+}
+
+.home-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.home-hero-actions .ant-btn {
+  min-width: 132px;
+  height: 48px;
+  border-radius: 16px;
+  font-size: 16px;
+}
+
+.home-hero-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.home-hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.home-metric,
+.home-hero-story {
+  border: 1px solid rgba(127, 154, 115, 0.14);
+  border-radius: 22px;
+  background: rgba(255, 253, 248, 0.78);
+  box-shadow: 0 14px 34px rgba(78, 90, 76, 0.06);
+}
+
+.home-metric {
+  min-height: 168px;
+  padding: 24px 22px 20px;
+}
+
+.home-metric span {
+  display: block;
+  color: var(--muted-text);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.home-metric strong {
+  display: block;
+  margin-top: 20px;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Songti SC", serif;
+  font-size: 42px;
+  color: var(--text-color);
+}
+
+.home-metric small {
+  display: block;
+  margin-top: 14px;
+  color: var(--muted-text);
+  font-size: 14px;
+}
+
+.home-hero-story {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 24px 22px;
+}
+
+.home-story-label {
+  margin: 0;
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.home-story-copy {
+  margin: 0;
+  color: var(--muted-text);
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.home-story-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-story-list li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--text-color);
+  line-height: 1.7;
+}
+
+.home-story-list li::before {
+  position: absolute;
+  left: 0;
+  top: 0.72em;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(127, 154, 115, 0.68);
+  content: "";
+}
+
+.home-section {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.home-section-head {
+  padding-inline: 6px;
+}
+
+.home-section-head .ant-typography {
+  margin-bottom: 0 !important;
+}
+
+.home-section-label {
+  margin-bottom: 6px;
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  .home-hero {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    padding: 28px 24px 24px;
+  }
+
+  .home-hero-copy {
+    gap: 16px;
+  }
+
+  .home-hero-copy h1 {
+    max-width: 11ch;
+    font-size: clamp(2.6rem, 10vw, 4.3rem) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  #homePage {
+    gap: 22px;
+  }
+
+  .home-hero {
+    gap: 18px;
+    padding: 22px 18px 20px;
+  }
+
+  .home-hero-copy h1 {
+    max-width: 8.2ch;
+    font-size: clamp(2.3rem, 11vw, 3.45rem) !important;
+  }
+
+  .home-hero-copy .ant-typography {
+    font-size: 15px;
+    line-height: 1.8;
+  }
+
+  .home-hero-actions {
+    gap: 10px;
+  }
+
+  .home-hero-actions .ant-btn {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .home-hero-actions > a {
+    flex: 1 1 100%;
+  }
+
+  .home-hero-metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .home-metric {
+    min-height: 142px;
+    padding: 18px 16px;
+  }
+
+  .home-metric strong {
+    margin-top: 14px;
+    font-size: 34px;
+  }
+
+  .home-hero-story {
+    padding: 20px 18px;
+  }
 }

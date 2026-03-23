@@ -1,4 +1,7 @@
-import { Avatar, Button, Card } from "antd";
+"use client";
+
+import { useEffect, useState } from "react";
+import { Avatar, Button, Card, Spin } from "antd";
 import { getQuestionBankVoByIdUsingGet } from "@/api/questionBankController";
 import Meta from "antd/es/card/Meta";
 import Paragraph from "antd/es/typography/Paragraph";
@@ -10,25 +13,53 @@ import "./index.css";
  * 题库详情页
  * @constructor
  */
-export default async function BankPage({ params }) {
+export default function BankPage({
+  params,
+}: {
+  params: { questionBankId: string };
+}) {
   const { questionBankId } = params;
-  let bank = undefined;
+  const [bank, setBank] = useState<API.QuestionBankVO>();
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
-  try {
-    const res = await getQuestionBankVoByIdUsingGet({
-      id: questionBankId,
-      needQueryQuestionList: true,
-      // 可以自行扩展为分页实现
-      pageSize: 200,
-    });
-    bank = res.data;
-  } catch (e) {
-    console.error("获取题库详情失败，" + e.message);
+  useEffect(() => {
+    const fetchBankDetail = async () => {
+      setLoading(true);
+      setLoadError("");
+      try {
+        const res = await getQuestionBankVoByIdUsingGet({
+          id: questionBankId,
+          needQueryQuestionList: true,
+          // 可以自行扩展为分页实现
+          pageSize: 200,
+        });
+        setBank((res as API.BaseResponseQuestionBankVO_).data);
+      } catch (e: any) {
+        const errorMessage = "获取题库详情失败，请刷新重试";
+        console.error("获取题库详情失败，" + e.message);
+        setLoadError(errorMessage);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBankDetail();
+  }, [questionBankId]);
+
+  if (loading) {
+    return (
+      <div id="bankPage" className="max-width-content">
+        <Card>
+          <Spin />
+        </Card>
+      </div>
+    );
   }
 
   // 错误处理
   if (!bank) {
-    return <div>获取题库详情失败，请刷新重试</div>;
+    return <div>{loadError || "获取题库详情失败，请刷新重试"}</div>;
   }
 
   // 获取第一道题目，用于 “开始刷题” 按钮跳转

@@ -131,7 +131,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         // 使用 Sa-Token 登录，并指定设备，同端登录互斥
         StpUtil.login(user.getId(), DeviceUtils.getRequestDevice(request));
-        StpUtil.getSession().set(USER_LOGIN_STATE, user);
         return this.getLoginUserVO(user);
     }
 
@@ -226,12 +225,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      */
     @Override
     public boolean isAdmin(HttpServletRequest request) {
-        // 仅管理员可查询
-        // 基于 Sa-Token 改造
-        Object userObj = StpUtil.getSession().get(USER_LOGIN_STATE);
-//        Object userObj = request.getSession().getAttribute(USER_LOGIN_STATE);
-        User user = (User) userObj;
-        return isAdmin(user);
+        return isAdmin(getLoginUser(request));
     }
 
     @Override
@@ -305,7 +299,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         queryWrapper.eq(StringUtils.isNotBlank(userRole), "userRole", userRole);
         queryWrapper.like(StringUtils.isNotBlank(userProfile), "userProfile", userProfile);
         queryWrapper.like(StringUtils.isNotBlank(userName), "userName", userName);
-        queryWrapper.orderBy(SqlUtils.validSortField(sortField), sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
+        queryWrapper.orderBy(SqlUtils.validSortField(sortField), CommonConstant.SORT_ORDER_ASC.equals(sortOrder),
                 sortField);
         return queryWrapper;
     }
@@ -328,10 +322,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (!signInBitSet.get(offset)) {
             // 如果当前未签到，则设置
             signInBitSet.set(offset, true);
+            // 使本地缓存失效，下次读取返回最新签到记录
+            signInRecordLocalCache.invalidate(getUserSignInRecordCacheKey(userId, year));
+            // 当天已签到
         }
-        // 使本地缓存失效，下次读取返回最新签到记录
-        signInRecordLocalCache.invalidate(getUserSignInRecordCacheKey(userId, year));
-        // 当天已签到
         return true;
     }
 
@@ -353,9 +347,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (localCachedDayList != null) {
             return new ArrayList<>(localCachedDayList);
         }
-        String key = RedisConstant.getUserSignInRedisKey(year, userId);
+//        String key = RedisConstant.getUserSignInRedisKey(year, userId);
         // 获取 Redis 的 BitMap
-        RBitSet signInBitSet = redissonClient.getBitSet(key);
+        RBitSet signInBitSet = redissonClient.getBitSet(localCacheKey);
         // 加载 BitSet 到内存中，避免后续读取时发送多次请求
         BitSet bitSet = signInBitSet.asBitSet();
         // 统计签到的日期
@@ -375,7 +369,5 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return String.format("signIn:record:%s:%s", userId, year);
     }
 }
-
-
 
 

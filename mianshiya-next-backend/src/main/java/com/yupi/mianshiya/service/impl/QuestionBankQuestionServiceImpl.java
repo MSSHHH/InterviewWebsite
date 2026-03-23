@@ -130,7 +130,7 @@ public class QuestionBankQuestionServiceImpl extends ServiceImpl<QuestionBankQue
         queryWrapper.eq(ObjectUtils.isNotEmpty(questionId), "questionId", questionId);
         // 排序规则
         queryWrapper.orderBy(SqlUtils.validSortField(sortField),
-                sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
+                CommonConstant.SORT_ORDER_ASC.equals(sortOrder),
                 sortField);
         return queryWrapper;
     }

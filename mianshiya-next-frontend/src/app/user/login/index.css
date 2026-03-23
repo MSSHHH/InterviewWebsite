@@ -1,2 +1,15 @@
 #userLoginPage {
+  min-height: calc(100vh - 160px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+#userLoginPage .ant-pro-form-login-container {
+  border: 1px solid var(--border-color);
+  border-radius: 30px;
+  background: rgba(252, 249, 242, 0.84);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(18px);
 }

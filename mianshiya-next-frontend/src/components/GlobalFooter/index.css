@@ -1,8 +1,11 @@
 .global-footer {
-  position: absolute;
-  bottom: 0;
   width: 100%;
-  background: #efefef;
-  padding: 16px;
+  padding: 28px 16px 18px;
   text-align: center;
+  color: var(--muted-text);
+  background: transparent;
+}
+
+.global-footer a {
+  color: var(--accent-deep);
 }

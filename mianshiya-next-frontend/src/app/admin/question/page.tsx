@@ -24,6 +24,12 @@ import "./index.css";
  * @constructor
  */
 const QuestionAdminPage: React.FC = () => {
+  const difficultyValueEnum = {
+    easy: { text: "简单" },
+    medium: { text: "中等" },
+    hard: { text: "困难" },
+  };
+
   // 是否显示新建窗口
   const [createModalVisible, setCreateModalVisible] = useState<boolean>(false);
   // 是否显示更新窗口
@@ -147,6 +153,12 @@ const QuestionAdminPage: React.FC = () => {
         const tagList = JSON.parse(record.tags || "[]");
         return <TagList tagList={tagList} />;
       },
+    },
+    {
+      title: "难度",
+      dataIndex: "difficulty",
+      valueType: "select",
+      valueEnum: difficultyValueEnum,
     },
     {
       title: "创建用户",

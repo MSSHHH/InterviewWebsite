@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewAddRequest;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewEventRequest;
+import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewEventResponse;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewQueryRequest;
 import com.yupi.mianshiya.model.entity.MockInterview;
 import com.yupi.mianshiya.model.entity.User;
@@ -38,5 +39,5 @@ public interface MockInterviewService extends IService<MockInterview> {
      * @param loginUser
      * @return AI 给出的回复
      */
-    String handleMockInterviewEvent(MockInterviewEventRequest mockInterviewEventRequest, User loginUser);
+    MockInterviewEventResponse handleMockInterviewEvent(MockInterviewEventRequest mockInterviewEventRequest, User loginUser);
 }

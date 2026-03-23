@@ -43,11 +43,26 @@ public class MockInterview implements Serializable {
     private String difficulty;
 
     /**
+     * 面试方向（如 Java 并发、Redis 高并发）。
+     */
+    private String topic;
+
+    /**
+     * 绑定的题库 id。
+     */
+    private Long questionBankId;
+
+    /**
      * 对话消息列表（JSON 数组字符串）。
      * 通常包含 system / interviewer / user 多角色消息，
      * 面试结束时还会附带总结信息。
      */
     private String messages;
+
+    /**
+     * 面试报告（JSON 字符串）。
+     */
+    private String report;
 
     /**
      * 面试状态：0-待开始、1-进行中、2-已结束。

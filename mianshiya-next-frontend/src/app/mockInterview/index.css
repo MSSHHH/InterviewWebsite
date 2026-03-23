@@ -1,0 +1,56 @@
+#mockInterviewHistoryPage {
+    max-width: 980px;
+    width: min(92vw, 980px);
+    margin: 0 auto;
+}
+
+#mockInterviewHistoryPage .history-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 24px;
+}
+
+#mockInterviewHistoryPage .history-header .ant-typography {
+    margin-bottom: 0;
+}
+
+#mockInterviewHistoryPage .history-shell {
+    border-radius: 24px;
+}
+
+#mockInterviewHistoryPage .record-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+#mockInterviewHistoryPage .record-meta {
+    margin-bottom: 0;
+    color: var(--text-secondary);
+}
+
+#mockInterviewHistoryPage .record-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#mockInterviewHistoryPage .history-pagination {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 24px;
+}
+
+@media (max-width: 768px) {
+    #mockInterviewHistoryPage .history-header,
+    #mockInterviewHistoryPage .record-top {
+        flex-direction: column;
+    }
+
+    #mockInterviewHistoryPage .history-pagination {
+        justify-content: center;
+    }
+}

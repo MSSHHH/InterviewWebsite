@@ -1,1 +1,1 @@
-[]
+[{"clusterMode":false,"controlBehavior":0,"count":30.0,"grade":1,"limitApp":"default","maxQueueingTimeMs":500,"resource":"listQuestionBankVOByPage","strategy":0,"warmUpPeriodSec":10}]

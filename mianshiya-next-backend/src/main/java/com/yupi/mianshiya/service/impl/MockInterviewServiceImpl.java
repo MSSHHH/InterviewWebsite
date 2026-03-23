@@ -1,47 +1,101 @@
 package com.yupi.mianshiya.service.impl;
 
+import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
+import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
 import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
+import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
+import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.constant.CommonConstant;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
 import com.yupi.mianshiya.manager.AiManager;
+import com.yupi.mianshiya.mapper.MockInterviewMapper;
+import com.yupi.mianshiya.model.dto.ai.AiToolChatResult;
+import com.yupi.mianshiya.model.dto.mockinterview.InterviewQuestionSearchResult;
+import com.yupi.mianshiya.model.dto.mockinterview.InterviewToolCallContext;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewAddRequest;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewChatMessage;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewEventRequest;
+import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewEventResponse;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewQueryRequest;
+import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewReport;
+import com.yupi.mianshiya.model.dto.question.QuestionQueryRequest;
 import com.yupi.mianshiya.model.entity.MockInterview;
+import com.yupi.mianshiya.model.entity.QuestionBank;
+import com.yupi.mianshiya.model.entity.Question;
 import com.yupi.mianshiya.model.entity.User;
 import com.yupi.mianshiya.model.enums.MockInterviewEventEnum;
 import com.yupi.mianshiya.model.enums.MockInterviewStatusEnum;
+import com.yupi.mianshiya.model.enums.QuestionDifficultyEnum;
 import com.yupi.mianshiya.service.MockInterviewService;
-import com.yupi.mianshiya.mapper.MockInterviewMapper;
+import com.yupi.mianshiya.service.QuestionBankService;
+import com.yupi.mianshiya.service.QuestionService;
 import com.yupi.mianshiya.utils.SqlUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * @author 李鱼皮
- * @description 针对表【mock_interview(模拟面试)】的数据库操作Service实现
- * @createDate 2025-02-26 17:16:07
+ * 模拟面试服务实现
  */
 @Service
+@Slf4j
 public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, MockInterview>
         implements MockInterviewService {
 
+    private static final int MAX_TOOL_ROUNDS = 6;
+
+    private static final int MAX_INTERVIEW_QUESTION_COUNT = 20;
+
+    private static final int DEFAULT_SEARCH_LIMIT = 5;
+
+    private static final String TOOL_SEARCH_QUESTIONS = "search_questions_by_topic";
+
+    private static final String TOOL_GET_QUESTION_DETAIL = "get_question_detail";
+
+    private static final String TOOL_GET_STANDARD_ANSWER = "get_standard_answer";
+
+    private static final String TOOL_FINISH_INTERVIEW = "finish_interview_and_generate_report";
+
+    private static final DateTimeFormatter REPORT_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
     @Resource
     private AiManager aiManager;
+
+    @Resource
+    private QuestionService questionService;
+
+    @Resource
+    private QuestionBankService questionBankService;
+
+    @Resource
+    private ObjectMapper objectMapper;
 
     /**
      * 创建模拟面试
@@ -52,25 +106,28 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
      */
     @Override
     public Long createMockInterview(MockInterviewAddRequest mockInterviewAddRequest, User loginUser) {
-        // 1. 参数校验
         if (mockInterviewAddRequest == null || loginUser == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
-        String workExperience = mockInterviewAddRequest.getWorkExperience();
-        String jobPosition = mockInterviewAddRequest.getJobPosition();
-        String difficulty = mockInterviewAddRequest.getDifficulty();
+        String workExperience = StrUtil.trim(mockInterviewAddRequest.getWorkExperience());
+        String jobPosition = StrUtil.trim(mockInterviewAddRequest.getJobPosition());
+        String difficulty = StrUtil.trim(mockInterviewAddRequest.getDifficulty());
+        Long questionBankId = mockInterviewAddRequest.getQuestionBankId();
         ThrowUtils.throwIf(StrUtil.hasBlank(workExperience, jobPosition, difficulty), ErrorCode.PARAMS_ERROR, "参数错误");
-        // 2. 封装插入到数据库中的对象
+        ThrowUtils.throwIf(questionBankId == null || questionBankId <= 0, ErrorCode.PARAMS_ERROR, "请选择题库方向");
+        ThrowUtils.throwIf(!QuestionDifficultyEnum.isValid(difficulty), ErrorCode.PARAMS_ERROR, "面试难度非法");
+        QuestionBank questionBank = questionBankService.getById(questionBankId);
+        ThrowUtils.throwIf(questionBank == null, ErrorCode.PARAMS_ERROR, "题库不存在");
         MockInterview mockInterview = new MockInterview();
         mockInterview.setWorkExperience(workExperience);
         mockInterview.setJobPosition(jobPosition);
         mockInterview.setDifficulty(difficulty);
+        mockInterview.setTopic(questionBank.getTitle());
+        mockInterview.setQuestionBankId(questionBankId);
         mockInterview.setUserId(loginUser.getId());
         mockInterview.setStatus(MockInterviewStatusEnum.TO_START.getValue());
-        // 3. 插入到数据库
         boolean result = this.save(mockInterview);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "创建失败");
-        // 4. 返回 id
         return mockInterview.getId();
     }
 
@@ -86,25 +143,26 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
         if (mockInterviewQueryRequest == null) {
             return queryWrapper;
         }
-        // 从对象中取值
         Long id = mockInterviewQueryRequest.getId();
         String workExperience = mockInterviewQueryRequest.getWorkExperience();
         String jobPosition = mockInterviewQueryRequest.getJobPosition();
         String difficulty = mockInterviewQueryRequest.getDifficulty();
+        String topic = mockInterviewQueryRequest.getTopic();
+        Long questionBankId = mockInterviewQueryRequest.getQuestionBankId();
         Integer status = mockInterviewQueryRequest.getStatus();
         Long userId = mockInterviewQueryRequest.getUserId();
         String sortField = mockInterviewQueryRequest.getSortField();
         String sortOrder = mockInterviewQueryRequest.getSortOrder();
-        // 补充需要的查询条件
         queryWrapper.eq(ObjectUtils.isNotEmpty(id), "id", id);
         queryWrapper.like(StringUtils.isNotBlank(workExperience), "workExperience", workExperience);
         queryWrapper.like(StringUtils.isNotBlank(jobPosition), "jobPosition", jobPosition);
         queryWrapper.like(StringUtils.isNotBlank(difficulty), "difficulty", difficulty);
+        queryWrapper.like(StringUtils.isNotBlank(topic), "topic", topic);
+        queryWrapper.eq(ObjectUtils.isNotEmpty(questionBankId), "questionBankId", questionBankId);
         queryWrapper.eq(ObjectUtils.isNotEmpty(status), "status", status);
         queryWrapper.eq(ObjectUtils.isNotEmpty(userId), "userId", userId);
-        // 排序规则
         queryWrapper.orderBy(SqlUtils.validSortField(sortField),
-                sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
+                CommonConstant.SORT_ORDER_ASC.equals(sortOrder),
                 sortField);
         return queryWrapper;
     }
@@ -117,171 +175,619 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
      * @return
      */
     @Override
-    public String handleMockInterviewEvent(MockInterviewEventRequest mockInterviewEventRequest, User loginUser) {
-        // 区分事件
+    @Transactional(rollbackFor = Exception.class)
+    public MockInterviewEventResponse handleMockInterviewEvent(MockInterviewEventRequest mockInterviewEventRequest, User loginUser) {
         Long id = mockInterviewEventRequest.getId();
-        if (id == null) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "参数错误");
-        }
+        ThrowUtils.throwIf(id == null, ErrorCode.PARAMS_ERROR, "参数错误");
         MockInterview mockInterview = this.getById(id);
         ThrowUtils.throwIf(mockInterview == null, ErrorCode.PARAMS_ERROR, "模拟面试未创建");
-        // 如果不是本人创建的模拟面试，报错
         if (!mockInterview.getUserId().equals(loginUser.getId())) {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
         }
         String event = mockInterviewEventRequest.getEvent();
         MockInterviewEventEnum eventEnum = MockInterviewEventEnum.getEnumByValue(event);
+        ThrowUtils.throwIf(eventEnum == null, ErrorCode.PARAMS_ERROR, "事件类型错误");
         switch (eventEnum) {
-            // -- 处理开始事件
-            // 用户进入模拟面试，发送“开始”事件，修改模拟面试的状态为“已开始”，AI 要给出对应的回复
             case START:
+                ThrowUtils.throwIf(MockInterviewStatusEnum.TO_START.getValue() != mockInterview.getStatus(),
+                        ErrorCode.OPERATION_ERROR, "模拟面试已开始");
                 return handleChatStartEvent(mockInterview);
-            // -- 处理对话事件
-            // 用户可以和 AI 面试官发送消息，发送“消息”事件，携带上要发送的消息内容，AI 要给出对应的回复
             case CHAT:
+                ThrowUtils.throwIf(MockInterviewStatusEnum.IN_PROGRESS.getValue() != mockInterview.getStatus(),
+                        ErrorCode.OPERATION_ERROR, "模拟面试未开始或已结束");
                 return handleChatMessageEvent(mockInterviewEventRequest, mockInterview);
             case END:
-                // -- 处理结束事件
-                // 退出模拟面试，发送“退出”事件，AI 给出面试的复盘总结，修改状态为“已结束”
+                ThrowUtils.throwIf(MockInterviewStatusEnum.ENDED.getValue() == mockInterview.getStatus(),
+                        ErrorCode.OPERATION_ERROR, "模拟面试已结束");
                 return handleChatEndEvent(mockInterview);
             default:
                 throw new BusinessException(ErrorCode.PARAMS_ERROR, "参数错误");
         }
     }
 
-    /**
-     * 处理 AI 对话结束事件
-     *
-     * @param mockInterview
-     * @return
-     */
-    private String handleChatEndEvent(MockInterview mockInterview) {
-        // 构造消息列表，注意需要先获取之前的消息记录
-        String historyMessage = mockInterview.getMessages();
-        List<MockInterviewChatMessage> historyMessageList = JSONUtil.parseArray(historyMessage).toList(MockInterviewChatMessage.class);
-        final List<ChatMessage> chatMessages = transformToChatMessage(historyMessageList);
-        // 构造用户结束消息
-        String endUserPrompt = "结束";
-        final ChatMessage endUserMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(endUserPrompt).build();
-        chatMessages.add(endUserMessage);
-        // 调用 AI 获取结果
-        String endAnswer = aiManager.doChat(chatMessages);
-        ChatMessage endAssistantMessage = ChatMessage.builder().role(ChatMessageRole.ASSISTANT).content(endAnswer).build();
-        chatMessages.add(endAssistantMessage);
-        // 保存消息记录，并且更新状态
-        List<MockInterviewChatMessage> mockInterviewChatMessages = transformFromChatMessage(chatMessages);
-        String newJsonStr = JSONUtil.toJsonStr(mockInterviewChatMessages);
-        MockInterview newUpdateMockInterview = new MockInterview();
-        newUpdateMockInterview.setStatus(MockInterviewStatusEnum.ENDED.getValue());
-        newUpdateMockInterview.setId(mockInterview.getId());
-        newUpdateMockInterview.setMessages(newJsonStr);
-        boolean newResult = this.updateById(newUpdateMockInterview);
-        ThrowUtils.throwIf(!newResult, ErrorCode.SYSTEM_ERROR, "更新失败");
-        return endAnswer;
+    private MockInterviewEventResponse handleChatStartEvent(MockInterview mockInterview) {
+        InterviewToolCallContext context = buildToolCallContext(mockInterview, Collections.emptyList());
+        List<ChatMessage> messages = buildConversationMessages(mockInterview, Collections.emptyList(), context);
+        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content("请正式开始这场模拟面试。").build());
+        AiToolChatResult aiToolChatResult = aiManager.doToolLoopChat(
+                messages,
+                buildInterviewTools(),
+                toolCall -> executeInterviewToolCall(toolCall, mockInterview, context),
+                MAX_TOOL_ROUNDS,
+                aiManager.getDefaultModel()
+        );
+        String finalAnswer = resolveFinalAnswer(aiToolChatResult, context);
+        List<MockInterviewChatMessage> newHistory = new ArrayList<>();
+        newHistory.add(buildAssistantHistoryMessage(finalAnswer, context));
+        saveInterviewProgress(mockInterview.getId(), MockInterviewStatusEnum.IN_PROGRESS.getValue(), newHistory, null);
+        return buildEventResponse(mockInterview.getId(), finalAnswer);
     }
 
-    /**
-     * 处理 AI 对话消息事件
-     *
-     * @param mockInterviewEventRequest
-     * @param mockInterview
-     * @return
-     */
-    private String handleChatMessageEvent(MockInterviewEventRequest mockInterviewEventRequest, MockInterview mockInterview) {
-        String message = mockInterviewEventRequest.getMessage();
-        // 构造消息列表，注意需要先获取之前的消息记录
-        String historyMessage = mockInterview.getMessages();
-        List<MockInterviewChatMessage> historyMessageList = JSONUtil.parseArray(historyMessage).toList(MockInterviewChatMessage.class);
-        final List<ChatMessage> chatMessages = transformToChatMessage(historyMessageList);
-        final ChatMessage chatUserMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(message).build();
-        chatMessages.add(chatUserMessage);
-        // 调用 AI 获取结果
-        String chatAnswer = aiManager.doChat(chatMessages);
-        ChatMessage chatAssistantMessage = ChatMessage.builder().role(ChatMessageRole.ASSISTANT).content(chatAnswer).build();
-        chatMessages.add(chatAssistantMessage);
-        // 保存消息记录，并且更新状态
-        List<MockInterviewChatMessage> mockInterviewChatMessages = transformFromChatMessage(chatMessages);
-        String newJsonStr = JSONUtil.toJsonStr(mockInterviewChatMessages);
-        MockInterview newUpdateMockInterview = new MockInterview();
-        newUpdateMockInterview.setId(mockInterview.getId());
-        newUpdateMockInterview.setMessages(newJsonStr);
-        // 如果 AI 主动结束了面试，更改状态
-        if (chatAnswer.contains("【面试结束】")) {
-            newUpdateMockInterview.setStatus(MockInterviewStatusEnum.ENDED.getValue());
+    private MockInterviewEventResponse handleChatMessageEvent(MockInterviewEventRequest mockInterviewEventRequest, MockInterview mockInterview) {
+        String userMessage = StrUtil.trim(mockInterviewEventRequest.getMessage());
+        ThrowUtils.throwIf(StrUtil.isBlank(userMessage), ErrorCode.PARAMS_ERROR, "消息不能为空");
+        List<MockInterviewChatMessage> historyMessageList = parseHistoryMessages(mockInterview.getMessages());
+        InterviewToolCallContext context = buildToolCallContext(mockInterview, historyMessageList);
+        List<ChatMessage> messages = buildConversationMessages(mockInterview, historyMessageList, context);
+        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content(userMessage).build());
+        AiToolChatResult aiToolChatResult = aiManager.doToolLoopChat(
+                messages,
+                buildInterviewTools(),
+                toolCall -> executeInterviewToolCall(toolCall, mockInterview, context),
+                MAX_TOOL_ROUNDS,
+                aiManager.getDefaultModel()
+        );
+        String finalAnswer = resolveFinalAnswer(aiToolChatResult, context);
+        historyMessageList.add(buildUserHistoryMessage(userMessage));
+        historyMessageList.add(buildAssistantHistoryMessage(finalAnswer, context));
+        saveInterviewProgress(mockInterview.getId(),
+                context.isEnded() ? MockInterviewStatusEnum.ENDED.getValue() : MockInterviewStatusEnum.IN_PROGRESS.getValue(),
+                historyMessageList,
+                context.getReport());
+        return buildEventResponse(mockInterview.getId(), finalAnswer);
+    }
+
+    private MockInterviewEventResponse handleChatEndEvent(MockInterview mockInterview) {
+        List<MockInterviewChatMessage> historyMessageList = parseHistoryMessages(mockInterview.getMessages());
+        InterviewToolCallContext context = buildToolCallContext(mockInterview, historyMessageList);
+        List<ChatMessage> messages = buildConversationMessages(mockInterview, historyMessageList, context);
+        messages.add(ChatMessage.builder()
+                .role(ChatMessageRole.USER)
+                .content("候选人要求立即结束面试。请生成完整的面试报告并给出最终总结。")
+                .build());
+        AiToolChatResult aiToolChatResult = aiManager.doToolLoopChat(
+                messages,
+                buildInterviewTools(),
+                toolCall -> executeInterviewToolCall(toolCall, mockInterview, context),
+                MAX_TOOL_ROUNDS,
+                aiManager.getDefaultModel()
+        );
+        ThrowUtils.throwIf(context.getReport() == null, ErrorCode.OPERATION_ERROR, "结束面试失败，未生成报告");
+        String finalAnswer = resolveFinalAnswer(aiToolChatResult, context);
+        historyMessageList.add(buildAssistantHistoryMessage(finalAnswer, context));
+        saveInterviewProgress(mockInterview.getId(), MockInterviewStatusEnum.ENDED.getValue(), historyMessageList, context.getReport());
+        return buildEventResponse(mockInterview.getId(), finalAnswer);
+    }
+
+    private MockInterviewEventResponse buildEventResponse(Long mockInterviewId, String aiResponse) {
+        MockInterview latestInterview = this.getById(mockInterviewId);
+        ThrowUtils.throwIf(latestInterview == null, ErrorCode.NOT_FOUND_ERROR, "模拟面试不存在");
+        MockInterviewEventResponse eventResponse = new MockInterviewEventResponse();
+        eventResponse.setAiResponse(aiResponse);
+        eventResponse.setMockInterview(latestInterview);
+        return eventResponse;
+    }
+
+    private InterviewToolCallContext buildToolCallContext(MockInterview mockInterview, List<MockInterviewChatMessage> historyMessageList) {
+        InterviewToolCallContext context = new InterviewToolCallContext();
+        context.setMockInterviewId(mockInterview.getId());
+        context.setTargetDifficulty(mockInterview.getDifficulty());
+        Set<Long> askedQuestionIds = historyMessageList.stream()
+                .map(MockInterviewChatMessage::getQuestionId)
+                .filter(ObjectUtils::isNotEmpty)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        context.getAskedQuestionIds().addAll(askedQuestionIds);
+        for (int i = historyMessageList.size() - 1; i >= 0; i--) {
+            MockInterviewChatMessage historyMessage = historyMessageList.get(i);
+            if (historyMessage.getQuestionId() != null) {
+                context.setCurrentQuestionId(historyMessage.getQuestionId());
+                context.setCurrentQuestionTitle(historyMessage.getQuestionTitle());
+                break;
+            }
         }
-        boolean newResult = this.updateById(newUpdateMockInterview);
-        ThrowUtils.throwIf(!newResult, ErrorCode.SYSTEM_ERROR, "更新失败");
-        return chatAnswer;
+        if (StringUtils.isNotBlank(mockInterview.getReport())) {
+            try {
+                context.setReport(objectMapper.readValue(mockInterview.getReport(), MockInterviewReport.class));
+            } catch (JsonProcessingException e) {
+                log.warn("parse mock interview report failed, interviewId={}", mockInterview.getId(), e);
+            }
+        }
+        return context;
     }
 
-    /**
-     * 处理 AI 对话开始事件
-     *
-     * @param mockInterview
-     * @return
-     */
-    private String handleChatStartEvent(MockInterview mockInterview) {
-        // 构造消息列表
-        // 定义 AI 的 Prompt
-        String systemPrompt = String.format("你是一位严厉的程序员面试官，我是候选人，来应聘 %s 的 %s 岗位，面试难度为 %s。请你向我依次提出问题（最多 20 个问题），我也会依次回复。在这期间请完全保持真人面试官的口吻，比如适当引导学员、或者表达出你对学员回答的态度。\n" +
-                "必须满足如下要求：\n" +
-                "1. 当学员回复 “开始” 时，你要正式开始面试\n" +
-                "2. 当学员表示希望 “结束面试” 时，你要结束面试\n" +
-                "3. 此外，当你觉得这场面试可以结束时（比如候选人回答结果较差、不满足工作年限的招聘需求、或者候选人态度不礼貌），必须主动提出面试结束，不用继续询问更多问题了。并且要在回复中包含字符串【面试结束】\n" +
-                "4. 面试结束后，应该给出候选人整场面试的表现和总结。", mockInterview.getWorkExperience(), mockInterview.getJobPosition(), mockInterview.getDifficulty());
-        String userPrompt = "开始";
-        final List<ChatMessage> messages = new ArrayList<>();
-        final ChatMessage systemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(systemPrompt).build();
-        final ChatMessage userMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build();
-        messages.add(systemMessage);
-        messages.add(userMessage);
-        // 调用 AI 获取结果
-        String answer = aiManager.doChat(messages);
-        ChatMessage assistantMessage = ChatMessage.builder().role(ChatMessageRole.ASSISTANT).content(answer).build();
-        messages.add(assistantMessage);
-        // 保存消息记录，并且更新状态
-        List<MockInterviewChatMessage> chatMessageList = transformFromChatMessage(messages);
-        String jsonStr = JSONUtil.toJsonStr(chatMessageList);
-        // 操作数据库进行更新
+    private List<ChatMessage> buildConversationMessages(MockInterview mockInterview,
+                                                        List<MockInterviewChatMessage> historyMessageList,
+                                                        InterviewToolCallContext context) {
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(buildSystemPrompt(mockInterview)).build());
+        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(buildRuntimeContextPrompt(mockInterview, context)).build());
+        for (MockInterviewChatMessage historyMessage : historyMessageList) {
+            if (StringUtils.isBlank(historyMessage.getRole()) || StringUtils.isBlank(historyMessage.getMessage())) {
+                continue;
+            }
+            ChatMessageRole role;
+            try {
+                role = ChatMessageRole.valueOf(StringUtils.upperCase(historyMessage.getRole()));
+            } catch (IllegalArgumentException e) {
+                continue;
+            }
+            if (role != ChatMessageRole.USER && role != ChatMessageRole.ASSISTANT) {
+                continue;
+            }
+            messages.add(ChatMessage.builder().role(role).content(historyMessage.getMessage()).build());
+        }
+        return messages;
+    }
+
+    private String buildSystemPrompt(MockInterview mockInterview) {
+        return String.format("你是一位严格但专业的程序员面试官，正在对候选人进行 %s 岗位模拟面试。候选人工作年限为 %s，目标面试难度上限为 %s，面试方向为 %s。\n" +
+                        "你必须遵守以下规则：\n" +
+                        "1. 你不能凭空杜撰题目，必须优先使用工具从题库中选题。\n" +
+                        "2. 开始面试时，必须先调用 %s 和 %s，再正式向候选人提问。\n" +
+                        "3. 候选人回答后，若要点评当前题，优先调用 %s 获取标准答案，再给出评价。\n" +
+                        "4. 每次只问一道题，不要一次抛出多道题。\n" +
+                        "5. 题目难度可以逐步提升，但不能超过本次面试的目标难度。\n" +
+                        "6. 不允许重复提问已经问过的题目。\n" +
+                        "7. 当候选人明确要求结束面试，或你判断面试可以结束时，必须调用 %s 生成结构化报告。\n" +
+                        "8. 调用 %s 后，再输出给用户的最终总结，语言自然，和报告保持一致。\n",
+                mockInterview.getJobPosition(),
+                mockInterview.getWorkExperience(),
+                mockInterview.getDifficulty(),
+                mockInterview.getTopic(),
+                TOOL_SEARCH_QUESTIONS,
+                TOOL_GET_QUESTION_DETAIL,
+                TOOL_GET_STANDARD_ANSWER,
+                TOOL_FINISH_INTERVIEW,
+                TOOL_FINISH_INTERVIEW);
+    }
+
+    private String buildRuntimeContextPrompt(MockInterview mockInterview, InterviewToolCallContext context) {
+        return String.format("当前会话上下文：\n" +
+                        "- 面试方向：%s\n" +
+                        "- 已提问题目 ID：%s\n" +
+                        "- 当前最近一道题 ID：%s\n" +
+                        "- 当前最近一道题标题：%s\n" +
+                        "- 已结束：%s\n" +
+                        "如果当前最近一道题 ID 不为空，并且你要先点评答案，请直接使用这个 id 调用 %s。",
+                mockInterview.getTopic(),
+                context.getAskedQuestionIds(),
+                context.getCurrentQuestionId(),
+                context.getCurrentQuestionTitle(),
+                context.isEnded(),
+                TOOL_GET_STANDARD_ANSWER);
+    }
+
+    private List<ChatTool> buildInterviewTools() {
+        List<ChatTool> tools = new ArrayList<>();
+        tools.add(buildSearchQuestionsTool());
+        tools.add(buildQuestionDetailTool());
+        tools.add(buildStandardAnswerTool());
+        tools.add(buildFinishInterviewTool());
+        return tools;
+    }
+
+    private ChatTool buildSearchQuestionsTool() {
+        ObjectNode parameters = objectMapper.createObjectNode();
+        parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties");
+        properties.putObject("topic")
+                .put("type", "string")
+                .put("description", "面试方向，例如 Java 并发、Redis 高并发");
+        properties.putObject("difficulty")
+                .put("type", "string")
+                .put("description", "目标题目难度，取值 easy / medium / hard");
+        ObjectNode excludeQuestionIdsNode = properties.putObject("excludeQuestionIds");
+        excludeQuestionIdsNode.put("type", "array");
+        excludeQuestionIdsNode.putObject("items").put("type", "integer");
+        properties.putObject("limit")
+                .put("type", "integer")
+                .put("description", "返回候选题数量，建议 1 - 5");
+        ArrayNode required = parameters.putArray("required");
+        required.add("topic");
+        required.add("difficulty");
+        ChatFunction function = new ChatFunction();
+        function.setName(TOOL_SEARCH_QUESTIONS);
+        function.setDescription("按面试方向和难度搜索候选题目");
+        function.setParameters(parameters);
+        ChatTool tool = new ChatTool();
+        tool.setType("function");
+        tool.setFunction(function);
+        return tool;
+    }
+
+    private ChatTool buildQuestionDetailTool() {
+        ObjectNode parameters = objectMapper.createObjectNode();
+        parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties");
+        properties.putObject("questionId")
+                .put("type", "integer")
+                .put("description", "题目 id");
+        parameters.putArray("required").add("questionId");
+        ChatFunction function = new ChatFunction();
+        function.setName(TOOL_GET_QUESTION_DETAIL);
+        function.setDescription("获取题目详情，用于正式发问");
+        function.setParameters(parameters);
+        ChatTool tool = new ChatTool();
+        tool.setType("function");
+        tool.setFunction(function);
+        return tool;
+    }
+
+    private ChatTool buildStandardAnswerTool() {
+        ObjectNode parameters = objectMapper.createObjectNode();
+        parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties");
+        properties.putObject("questionId")
+                .put("type", "integer")
+                .put("description", "题目 id");
+        parameters.putArray("required").add("questionId");
+        ChatFunction function = new ChatFunction();
+        function.setName(TOOL_GET_STANDARD_ANSWER);
+        function.setDescription("获取题目标准答案，用于点评候选人回答");
+        function.setParameters(parameters);
+        ChatTool tool = new ChatTool();
+        tool.setType("function");
+        tool.setFunction(function);
+        return tool;
+    }
+
+    private ChatTool buildFinishInterviewTool() {
+        ObjectNode parameters = objectMapper.createObjectNode();
+        parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties");
+        ArrayNode required = parameters.putArray("required");
+        properties.putObject("questionIds")
+                .put("type", "array")
+                .putObject("items")
+                .put("type", "integer");
+        properties.putObject("overallScore")
+                .put("type", "integer")
+                .put("description", "0 - 100 的总分");
+        properties.putObject("summary")
+                .put("type", "string")
+                .put("description", "整体总结");
+        ObjectNode strengthsItems = properties.putObject("strengths").put("type", "array").putObject("items");
+        strengthsItems.put("type", "string");
+        ObjectNode weaknessesItems = properties.putObject("weaknesses").put("type", "array").putObject("items");
+        weaknessesItems.put("type", "string");
+        ObjectNode suggestionsItems = properties.putObject("suggestions").put("type", "array").putObject("items");
+        suggestionsItems.put("type", "string");
+        properties.putObject("finalMessage")
+                .put("type", "string")
+                .put("description", "最终返回给候选人的自然语言总结");
+        required.add("overallScore");
+        required.add("summary");
+        required.add("strengths");
+        required.add("weaknesses");
+        required.add("suggestions");
+        required.add("finalMessage");
+        ChatFunction function = new ChatFunction();
+        function.setName(TOOL_FINISH_INTERVIEW);
+        function.setDescription("结束面试并生成结构化报告");
+        function.setParameters(parameters);
+        ChatTool tool = new ChatTool();
+        tool.setType("function");
+        tool.setFunction(function);
+        return tool;
+    }
+
+    private String executeInterviewToolCall(ChatToolCall toolCall, MockInterview mockInterview, InterviewToolCallContext context) {
+        ChatFunctionCall function = toolCall.getFunction();
+        ThrowUtils.throwIf(function == null || StringUtils.isBlank(function.getName()), ErrorCode.OPERATION_ERROR, "工具调用缺少函数名");
+        JsonNode argumentsNode = parseArguments(function.getArguments());
+        switch (function.getName()) {
+            case TOOL_SEARCH_QUESTIONS:
+                context.setLastToolName(TOOL_SEARCH_QUESTIONS);
+                return handleSearchQuestions(argumentsNode, mockInterview, context);
+            case TOOL_GET_QUESTION_DETAIL:
+                context.setLastToolName(TOOL_GET_QUESTION_DETAIL);
+                return handleGetQuestionDetail(argumentsNode, context);
+            case TOOL_GET_STANDARD_ANSWER:
+                context.setLastToolName(TOOL_GET_STANDARD_ANSWER);
+                return handleGetStandardAnswer(argumentsNode, context);
+            case TOOL_FINISH_INTERVIEW:
+                context.setLastToolName(TOOL_FINISH_INTERVIEW);
+                return handleFinishInterview(argumentsNode, mockInterview, context);
+            default:
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "未知工具调用: " + function.getName());
+        }
+    }
+
+    private String handleSearchQuestions(JsonNode argumentsNode, MockInterview mockInterview, InterviewToolCallContext context) {
+        String topic = getNodeText(argumentsNode, "topic", mockInterview.getTopic());
+        String requestedDifficulty = normalizeDifficulty(getNodeText(argumentsNode, "difficulty", context.getTargetDifficulty()));
+        int limit = Math.max(1, Math.min(5, getNodeInt(argumentsNode, "limit", DEFAULT_SEARCH_LIMIT)));
+        Set<Long> excludeQuestionIds = new LinkedHashSet<>(context.getAskedQuestionIds());
+        JsonNode excludeQuestionIdsNode = argumentsNode.get("excludeQuestionIds");
+        if (excludeQuestionIdsNode != null && excludeQuestionIdsNode.isArray()) {
+            excludeQuestionIdsNode.forEach(node -> excludeQuestionIds.add(node.asLong()));
+        }
+        List<InterviewQuestionSearchResult> questionSearchResults =
+                searchQuestionsByTopic(mockInterview.getQuestionBankId(), topic, requestedDifficulty, excludeQuestionIds, limit);
+        ObjectNode resultNode = objectMapper.createObjectNode();
+        resultNode.putPOJO("questions", questionSearchResults);
+        return writeJson(resultNode);
+    }
+
+    private String handleGetQuestionDetail(JsonNode argumentsNode, InterviewToolCallContext context) {
+        long questionId = getRequiredLong(argumentsNode, "questionId");
+        Question question = questionService.getById(questionId);
+        ThrowUtils.throwIf(question == null, ErrorCode.NOT_FOUND_ERROR, "题目不存在");
+        context.setCurrentQuestionId(question.getId());
+        context.setCurrentQuestionTitle(question.getTitle());
+        context.setCurrentQuestionDifficulty(question.getDifficulty());
+        context.getAskedQuestionIds().add(question.getId());
+        ObjectNode resultNode = objectMapper.createObjectNode();
+        resultNode.put("id", question.getId());
+        resultNode.put("title", question.getTitle());
+        resultNode.put("content", question.getContent());
+        resultNode.put("difficulty", question.getDifficulty());
+        if (StrUtil.isNotBlank(question.getTags())) {
+            resultNode.set("tags", objectMapper.valueToTree(JSONUtil.toList(JSONUtil.parseArray(question.getTags()), String.class)));
+        } else {
+            resultNode.set("tags", objectMapper.createArrayNode());
+        }
+        return writeJson(resultNode);
+    }
+
+    private String handleGetStandardAnswer(JsonNode argumentsNode, InterviewToolCallContext context) {
+        long questionId = getRequiredLong(argumentsNode, "questionId");
+        Question question = questionService.getById(questionId);
+        ThrowUtils.throwIf(question == null, ErrorCode.NOT_FOUND_ERROR, "题目不存在");
+        context.setCurrentQuestionId(question.getId());
+        context.setCurrentQuestionTitle(question.getTitle());
+        ObjectNode resultNode = objectMapper.createObjectNode();
+        resultNode.put("questionId", question.getId());
+        resultNode.put("title", question.getTitle());
+        resultNode.put("answer", question.getAnswer());
+        return writeJson(resultNode);
+    }
+
+    private String handleFinishInterview(JsonNode argumentsNode, MockInterview mockInterview, InterviewToolCallContext context) {
+        int overallScore = getNodeInt(argumentsNode, "overallScore", -1);
+        ThrowUtils.throwIf(overallScore < 0 || overallScore > 100, ErrorCode.PARAMS_ERROR, "总分非法");
+        String summary = StrUtil.trim(getNodeText(argumentsNode, "summary", null));
+        String finalMessage = StrUtil.trim(getNodeText(argumentsNode, "finalMessage", null));
+        List<String> strengths = getRequiredStringList(argumentsNode, "strengths");
+        List<String> weaknesses = getRequiredStringList(argumentsNode, "weaknesses");
+        List<String> suggestions = getRequiredStringList(argumentsNode, "suggestions");
+        ThrowUtils.throwIf(StrUtil.hasBlank(summary, finalMessage), ErrorCode.PARAMS_ERROR, "报告内容不完整");
+        List<Long> questionIds = extractQuestionIds(argumentsNode.get("questionIds"));
+        if (CollUtil.isEmpty(questionIds)) {
+            questionIds = new ArrayList<>(context.getAskedQuestionIds());
+        }
+        MockInterviewReport report = new MockInterviewReport();
+        report.setOverallScore(overallScore);
+        report.setSummary(summary);
+        report.setStrengths(strengths);
+        report.setWeaknesses(weaknesses);
+        report.setSuggestions(suggestions);
+        report.setQuestionIds(questionIds);
+        report.setFinishedAt(REPORT_TIME_FORMATTER.format(LocalDateTime.now()));
+        context.setReport(report);
+        context.setFinalMessage(finalMessage);
+        context.setEnded(true);
         MockInterview updateMockInterview = new MockInterview();
-        updateMockInterview.setStatus(MockInterviewStatusEnum.IN_PROGRESS.getValue());
         updateMockInterview.setId(mockInterview.getId());
-        updateMockInterview.setMessages(jsonStr);
+        updateMockInterview.setStatus(MockInterviewStatusEnum.ENDED.getValue());
+        updateMockInterview.setReport(writeJson(report));
+        boolean result = this.updateById(updateMockInterview);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "生成面试报告失败");
+        ObjectNode resultNode = objectMapper.createObjectNode();
+        resultNode.put("status", "ok");
+        resultNode.put("ended", true);
+        resultNode.put("finalMessage", finalMessage);
+        return writeJson(resultNode);
+    }
+
+    private List<InterviewQuestionSearchResult> searchQuestionsByTopic(Long questionBankId,
+                                                                       String topic,
+                                                                       String requestedDifficulty,
+                                                                       Set<Long> excludeQuestionIds,
+                                                                       int limit) {
+        List<String> difficultyOrder = buildDifficultyFallbackOrder(requestedDifficulty);
+        for (String difficulty : difficultyOrder) {
+            List<InterviewQuestionSearchResult> resultList =
+                    doSearchQuestions(questionBankId, topic, difficulty, excludeQuestionIds, limit);
+            if (CollUtil.isNotEmpty(resultList)) {
+                return resultList;
+            }
+        }
+        return Collections.emptyList();
+    }
+
+    private List<InterviewQuestionSearchResult> doSearchQuestions(Long questionBankId,
+                                                                  String topic,
+                                                                  String difficulty,
+                                                                  Set<Long> excludeQuestionIds,
+                                                                  int limit) {
+        if (excludeQuestionIds.size() >= MAX_INTERVIEW_QUESTION_COUNT) {
+            return Collections.emptyList();
+        }
+        QuestionQueryRequest questionQueryRequest = new QuestionQueryRequest();
+        questionQueryRequest.setCurrent(1);
+        questionQueryRequest.setPageSize(50);
+        questionQueryRequest.setQuestionBankId(questionBankId);
+        if (questionBankId == null && StrUtil.isNotBlank(topic)) {
+            questionQueryRequest.setSearchText(topic);
+        }
+        questionQueryRequest.setDifficulty(difficulty);
+        Page<Question> questionPage = null;
+        try {
+            questionPage = questionService.searchFromEs(questionQueryRequest);
+        } catch (Exception e) {
+            log.warn("search interview questions from es failed, fallback to mysql, topic={}, difficulty={}", topic, difficulty, e);
+        }
+        if (questionPage == null || CollUtil.isEmpty(questionPage.getRecords())) {
+            questionPage = questionService.listQuestionByPage(questionQueryRequest);
+        }
+        return questionPage.getRecords().stream()
+                .filter(question -> !excludeQuestionIds.contains(question.getId()))
+                .limit(limit)
+                .map(question -> {
+                    InterviewQuestionSearchResult questionSearchResult = new InterviewQuestionSearchResult();
+                    questionSearchResult.setId(question.getId());
+                    questionSearchResult.setTitle(question.getTitle());
+                    questionSearchResult.setDifficulty(question.getDifficulty());
+                    if (StrUtil.isNotBlank(question.getTags())) {
+                        questionSearchResult.setTags(JSONUtil.toList(JSONUtil.parseArray(question.getTags()), String.class));
+                    } else {
+                        questionSearchResult.setTags(Collections.emptyList());
+                    }
+                    return questionSearchResult;
+                })
+                .collect(Collectors.toList());
+    }
+
+    private List<String> buildDifficultyFallbackOrder(String difficulty) {
+        String normalizedDifficulty = normalizeDifficulty(difficulty);
+        switch (normalizedDifficulty) {
+            case "easy":
+                return Arrays.asList("easy", "medium", "hard");
+            case "hard":
+                return Arrays.asList("hard", "medium", "easy");
+            case "medium":
+            default:
+                return Arrays.asList("medium", "easy", "hard");
+        }
+    }
+
+    private String normalizeDifficulty(String difficulty) {
+        if (!QuestionDifficultyEnum.isValid(difficulty)) {
+            return QuestionDifficultyEnum.MEDIUM.getValue();
+        }
+        return difficulty;
+    }
+
+    private String resolveFinalAnswer(AiToolChatResult aiToolChatResult, InterviewToolCallContext context) {
+        if (aiToolChatResult != null && aiToolChatResult.getAssistantMessage() != null
+                && aiToolChatResult.getAssistantMessage().getContent() != null) {
+            return aiToolChatResult.getAssistantMessage().stringContent();
+        }
+        if (StrUtil.isNotBlank(context.getFinalMessage())) {
+            return context.getFinalMessage();
+        }
+        throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 未返回最终回复");
+    }
+
+    private List<MockInterviewChatMessage> parseHistoryMessages(String historyMessage) {
+        if (StrUtil.isBlank(historyMessage)) {
+            return new ArrayList<>();
+        }
+        try {
+            return JSONUtil.parseArray(historyMessage).toList(MockInterviewChatMessage.class);
+        } catch (Exception e) {
+            log.warn("parse interview messages failed", e);
+            return new ArrayList<>();
+        }
+    }
+
+    private MockInterviewChatMessage buildUserHistoryMessage(String userMessage) {
+        MockInterviewChatMessage chatMessage = new MockInterviewChatMessage();
+        chatMessage.setRole(ChatMessageRole.USER.value());
+        chatMessage.setMessage(userMessage);
+        return chatMessage;
+    }
+
+    private MockInterviewChatMessage buildAssistantHistoryMessage(String assistantMessage, InterviewToolCallContext context) {
+        MockInterviewChatMessage chatMessage = new MockInterviewChatMessage();
+        chatMessage.setRole(ChatMessageRole.ASSISTANT.value());
+        chatMessage.setMessage(assistantMessage);
+        chatMessage.setToolName(context.getLastToolName());
+        if (!context.isEnded() && context.getCurrentQuestionId() != null) {
+            chatMessage.setQuestionId(context.getCurrentQuestionId());
+            chatMessage.setQuestionTitle(context.getCurrentQuestionTitle());
+        }
+        return chatMessage;
+    }
+
+    private void saveInterviewProgress(Long mockInterviewId,
+                                       Integer status,
+                                       List<MockInterviewChatMessage> historyMessageList,
+                                       MockInterviewReport report) {
+        MockInterview updateMockInterview = new MockInterview();
+        updateMockInterview.setId(mockInterviewId);
+        updateMockInterview.setStatus(status);
+        updateMockInterview.setMessages(JSONUtil.toJsonStr(historyMessageList));
+        if (report != null) {
+            updateMockInterview.setReport(writeJson(report));
+        }
         boolean result = this.updateById(updateMockInterview);
         ThrowUtils.throwIf(!result, ErrorCode.SYSTEM_ERROR, "更新失败");
-        return answer;
     }
 
-    /**
-     * 消息记录对象转换
-     *
-     * @param chatMessageList
-     * @return
-     */
-    List<MockInterviewChatMessage> transformFromChatMessage(List<ChatMessage> chatMessageList) {
-        return chatMessageList.stream().map(chatMessage -> {
-            MockInterviewChatMessage mockInterviewChatMessage = new MockInterviewChatMessage();
-            mockInterviewChatMessage.setRole(chatMessage.getRole().value());
-            mockInterviewChatMessage.setMessage(chatMessage.getContent().toString());
-            return mockInterviewChatMessage;
-        }).collect(Collectors.toList());
+    private JsonNode parseArguments(String arguments) {
+        try {
+            if (StringUtils.isBlank(arguments)) {
+                return objectMapper.createObjectNode();
+            }
+            return objectMapper.readTree(arguments);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "工具参数解析失败");
+        }
     }
 
-    /**
-     * 消息记录对象转换
-     *
-     * @param chatMessageList
-     * @return
-     */
-    List<ChatMessage> transformToChatMessage(List<MockInterviewChatMessage> chatMessageList) {
-        return chatMessageList.stream().map(chatMessage -> {
-            ChatMessage tempChatMessage = ChatMessage.builder().role(ChatMessageRole.valueOf(StringUtils.upperCase(chatMessage.getRole())))
-                    .content(chatMessage.getMessage()).build();
-            return tempChatMessage;
-        }).collect(Collectors.toList());
+    private String getNodeText(JsonNode jsonNode, String fieldName, String defaultValue) {
+        JsonNode fieldNode = jsonNode.get(fieldName);
+        if (fieldNode == null || fieldNode.isNull()) {
+            return defaultValue;
+        }
+        return fieldNode.asText(defaultValue);
+    }
+
+    private int getNodeInt(JsonNode jsonNode, String fieldName, int defaultValue) {
+        JsonNode fieldNode = jsonNode.get(fieldName);
+        if (fieldNode == null || fieldNode.isNull()) {
+            return defaultValue;
+        }
+        return fieldNode.asInt(defaultValue);
+    }
+
+    private long getRequiredLong(JsonNode jsonNode, String fieldName) {
+        JsonNode fieldNode = jsonNode.get(fieldName);
+        ThrowUtils.throwIf(fieldNode == null || fieldNode.isNull(), ErrorCode.PARAMS_ERROR, fieldName + " 不能为空");
+        return fieldNode.asLong();
+    }
+
+    private List<String> getRequiredStringList(JsonNode jsonNode, String fieldName) {
+        JsonNode fieldNode = jsonNode.get(fieldName);
+        ThrowUtils.throwIf(fieldNode == null || !fieldNode.isArray() || fieldNode.size() == 0,
+                ErrorCode.PARAMS_ERROR, fieldName + " 不能为空");
+        List<String> result = new ArrayList<>();
+        fieldNode.forEach(node -> {
+            String value = StrUtil.trim(node.asText());
+            if (StrUtil.isNotBlank(value)) {
+                result.add(value);
+            }
+        });
+        ThrowUtils.throwIf(CollUtil.isEmpty(result), ErrorCode.PARAMS_ERROR, fieldName + " 不能为空");
+        return result;
+    }
+
+    private List<Long> extractQuestionIds(JsonNode jsonNode) {
+        if (jsonNode == null || !jsonNode.isArray()) {
+            return Collections.emptyList();
+        }
+        List<Long> questionIds = new ArrayList<>();
+        jsonNode.forEach(node -> questionIds.add(node.asLong()));
+        return questionIds;
+    }
+
+    private String writeJson(Object obj) {
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "JSON 序列化失败");
+        }
     }
 }
-
-
-
-

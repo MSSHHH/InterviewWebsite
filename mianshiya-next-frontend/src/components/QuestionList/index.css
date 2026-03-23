@@ -1,3 +1,8 @@
-.question-list {
+.question-list .ant-list-item {
+  border-block-end-color: rgba(118, 137, 111, 0.12) !important;
+}
 
+.question-list .ant-list-item a {
+  color: var(--text-color);
+  font-weight: 600;
 }

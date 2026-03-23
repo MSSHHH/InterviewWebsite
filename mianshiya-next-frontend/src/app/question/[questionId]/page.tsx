@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Card, Spin } from "antd";
 import { getQuestionVoByIdUsingGet } from "@/api/questionController";
 import QuestionCard from "@/components/QuestionCard";
 import "./index.css";
@@ -6,22 +10,49 @@ import "./index.css";
  * 题目详情页
  * @constructor
  */
-export default async function QuestionPage({ params }) {
+export default function QuestionPage({
+  params,
+}: {
+  params: { questionId: string };
+}) {
   const { questionId } = params;
+  const [question, setQuestion] = useState<API.QuestionVO>();
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
-  // 获取题目详情
-  let question = undefined;
-  try {
-    const res = await getQuestionVoByIdUsingGet({
-      id: questionId,
-    });
-    question = res.data;
-  } catch (e) {
-    console.error("获取题目详情失败", e);
+  useEffect(() => {
+    const fetchQuestionDetail = async () => {
+      setLoading(true);
+      setLoadError("");
+      try {
+        const res = (await getQuestionVoByIdUsingGet({
+          id: questionId,
+        })) as API.BaseResponseQuestionVO_;
+        setQuestion(res.data);
+      } catch (e: any) {
+        const errorMessage = "获取题目详情失败，请刷新重试";
+        console.error("获取题目详情失败", e.message);
+        setLoadError(errorMessage);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchQuestionDetail();
+  }, [questionId]);
+
+  if (loading) {
+    return (
+      <div id="questionPage">
+        <Card>
+          <Spin />
+        </Card>
+      </div>
+    );
   }
-  // 错误处理
+
   if (!question) {
-    return <div>获取题目详情失败，请刷新重试</div>;
+    return <div>{loadError || "获取题目详情失败，请刷新重试"}</div>;
   }
 
   return (

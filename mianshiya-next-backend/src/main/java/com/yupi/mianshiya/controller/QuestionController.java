@@ -11,6 +11,8 @@ import com.alibaba.csp.sentinel.Tracer;
 import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.alibaba.csp.sentinel.slots.block.degrade.DegradeException;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.yupi.mianshiya.common.BaseResponse;
 import com.yupi.mianshiya.common.DeleteRequest;
 import com.yupi.mianshiya.common.ErrorCode;
@@ -22,16 +24,19 @@ import com.yupi.mianshiya.manager.CounterManager;
 import com.yupi.mianshiya.model.dto.question.*;
 import com.yupi.mianshiya.model.entity.Question;
 import com.yupi.mianshiya.model.entity.User;
+import com.yupi.mianshiya.model.enums.QuestionDifficultyEnum;
 import com.yupi.mianshiya.model.vo.QuestionVO;
 import com.yupi.mianshiya.sentinel.SentinelConstant;
 import com.yupi.mianshiya.service.QuestionService;
 import com.yupi.mianshiya.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -56,6 +61,15 @@ import java.util.concurrent.TimeUnit;
 @RequestMapping("/question")
 @Slf4j
 public class QuestionController {
+
+    /**
+     * 题目分页本地缓存（用于 Sentinel 降级兜底）
+     */
+    private final Cache<String, Page<QuestionVO>> questionListLocalCache = Caffeine.newBuilder()
+            .initialCapacity(128)
+            .maximumSize(5_000)
+            .expireAfterWrite(5, TimeUnit.MINUTES)
+            .build();
 
     @Resource
     private QuestionService questionService;
@@ -83,6 +97,9 @@ public class QuestionController {
         if (tags != null) {
             question.setTags(JSONUtil.toJsonStr(tags));
         }
+        if (StrUtil.isBlank(question.getDifficulty())) {
+            question.setDifficulty(QuestionDifficultyEnum.MEDIUM.getValue());
+        }
         // 数据校验
         questionService.validQuestion(question, true);
         // todo 填充默认值
@@ -91,6 +108,7 @@ public class QuestionController {
         // 写入数据库
         boolean result = questionService.save(question);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        questionListLocalCache.invalidateAll();
         // 返回新写入的数据 id
         long newQuestionId = question.getId();
         return ResultUtils.success(newQuestionId);
@@ -121,6 +139,7 @@ public class QuestionController {
         // 操作数据库
         boolean result = questionService.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        questionListLocalCache.invalidateAll();
         return ResultUtils.success(true);
     }
 
@@ -143,6 +162,9 @@ public class QuestionController {
         if (tags != null) {
             question.setTags(JSONUtil.toJsonStr(tags));
         }
+        if (StrUtil.isBlank(question.getDifficulty())) {
+            question.setDifficulty(QuestionDifficultyEnum.MEDIUM.getValue());
+        }
         // 数据校验
         questionService.validQuestion(question, false);
         // 判断是否存在
@@ -152,6 +174,7 @@ public class QuestionController {
         // 操作数据库
         boolean result = questionService.updateById(question);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        questionListLocalCache.invalidateAll();
         return ResultUtils.success(true);
     }
 
@@ -238,14 +261,7 @@ public class QuestionController {
     @PostMapping("/list/page/vo")
     public BaseResponse<Page<QuestionVO>> listQuestionVOByPage(@RequestBody QuestionQueryRequest questionQueryRequest,
                                                                HttpServletRequest request) {
-        ThrowUtils.throwIf(questionQueryRequest == null, ErrorCode.PARAMS_ERROR);
-        long size = questionQueryRequest.getPageSize();
-        // 限制爬虫
-        ThrowUtils.throwIf(size > 20, ErrorCode.PARAMS_ERROR);
-        // 查询数据库
-        Page<Question> questionPage = questionService.listQuestionByPage(questionQueryRequest);
-        // 获取封装类
-        return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+        return doListQuestionVOByPageWithSentinel(questionQueryRequest, request);
     }
 
     /**
@@ -258,32 +274,37 @@ public class QuestionController {
     @PostMapping("/list/page/vo/sentinel")
     public BaseResponse<Page<QuestionVO>> listQuestionVOByPageSentinel(@RequestBody QuestionQueryRequest questionQueryRequest,
                                                                        HttpServletRequest request) {
+        return doListQuestionVOByPageWithSentinel(questionQueryRequest, request);
+    }
+
+    private BaseResponse<Page<QuestionVO>> doListQuestionVOByPageWithSentinel(QuestionQueryRequest questionQueryRequest,
+                                                                              HttpServletRequest request) {
         ThrowUtils.throwIf(questionQueryRequest == null, ErrorCode.PARAMS_ERROR);
         long size = questionQueryRequest.getPageSize();
         // 限制爬虫
         ThrowUtils.throwIf(size > 20, ErrorCode.PARAMS_ERROR);
+        String listCacheKey = buildQuestionListCacheKey(questionQueryRequest);
         // 基于 IP 限流
         String remoteAddr = request.getRemoteAddr();
         Entry entry = null;
         try {
             entry = SphU.entry(SentinelConstant.listQuestionVOByPage, EntryType.IN, 1, remoteAddr);
             // 被保护的业务逻辑
-            // 查询数据库
+            Page<QuestionVO> localCachePage = questionListLocalCache.getIfPresent(listCacheKey);
+            if (localCachePage != null) {
+                return ResultUtils.success(localCachePage);
+            }
             Page<Question> questionPage = questionService.listQuestionByPage(questionQueryRequest);
-            // 获取封装类
-            return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+            Page<QuestionVO> questionVOPage = questionService.getQuestionVOPage(questionPage, request);
+            questionListLocalCache.put(listCacheKey, questionVOPage);
+            return ResultUtils.success(questionVOPage);
         } catch (Throwable ex) {
             // 业务异常
             if (!BlockException.isBlockException(ex)) {
                 Tracer.trace(ex);
                 return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "系统错误");
             }
-            // 降级操作
-            if (ex instanceof DegradeException) {
-                return handleFallback(questionQueryRequest, request, ex);
-            }
-            // 限流操作
-            return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "访问过于频繁，请稍后再试");
+            return handleBlockException(questionQueryRequest, request, (BlockException) ex);
         } finally {
             if (entry != null) {
                 entry.exit(1, remoteAddr);
@@ -292,12 +313,62 @@ public class QuestionController {
     }
 
     /**
+     * listQuestionVOByPageSentinel 流控 / 熔断处理：
+     * 优先返回本地缓存兜底，避免热门列表在高峰期直接打挂用户体验。
+     */
+    public BaseResponse<Page<QuestionVO>> handleBlockException(@RequestBody QuestionQueryRequest questionQueryRequest,
+                                                               HttpServletRequest request,
+                                                               BlockException ex) {
+        BaseResponse<Page<QuestionVO>> cacheFallback = getQuestionListCacheFallback(questionQueryRequest);
+        if (cacheFallback != null) {
+            return cacheFallback;
+        }
+        if (ex instanceof DegradeException) {
+            return handleFallback(questionQueryRequest, request, ex);
+        }
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "访问过于频繁，请稍后再试");
+    }
+
+    /**
      * listQuestionVOByPageSentinel 降级操作：直接返回本地数据（此处为了方便演示，写在同一个类中）
      */
     public BaseResponse<Page<QuestionVO>> handleFallback(@RequestBody QuestionQueryRequest questionQueryRequest,
                                                          HttpServletRequest request, Throwable ex) {
-        // 可以返回本地数据或空数据
-        return ResultUtils.success(null);
+        BaseResponse<Page<QuestionVO>> cacheFallback = getQuestionListCacheFallback(questionQueryRequest);
+        if (cacheFallback != null) {
+            return cacheFallback;
+        }
+        long current = questionQueryRequest == null ? 1 : questionQueryRequest.getCurrent();
+        long pageSize = questionQueryRequest == null ? 10 : questionQueryRequest.getPageSize();
+        return ResultUtils.success(new Page<>(current, pageSize, 0));
+    }
+
+    private BaseResponse<Page<QuestionVO>> getQuestionListCacheFallback(QuestionQueryRequest questionQueryRequest) {
+        String listCacheKey = buildQuestionListCacheKey(questionQueryRequest);
+        Page<QuestionVO> localCachePage = questionListLocalCache.getIfPresent(listCacheKey);
+        if (localCachePage == null) {
+            return null;
+        }
+        return ResultUtils.success(localCachePage);
+    }
+
+    private String buildQuestionListCacheKey(QuestionQueryRequest questionQueryRequest) {
+        if (questionQueryRequest == null) {
+            return "question:list:default";
+        }
+        String source = String.format("current=%s|size=%s|search=%s|title=%s|content=%s|tags=%s|userId=%s|sortField=%s|sortOrder=%s|questionBankId=%s|difficulty=%s",
+                questionQueryRequest.getCurrent(),
+                questionQueryRequest.getPageSize(),
+                questionQueryRequest.getSearchText(),
+                questionQueryRequest.getTitle(),
+                questionQueryRequest.getContent(),
+                questionQueryRequest.getTags(),
+                questionQueryRequest.getUserId(),
+                questionQueryRequest.getSortField(),
+                questionQueryRequest.getSortOrder(),
+                questionQueryRequest.getQuestionBankId(),
+                questionQueryRequest.getDifficulty());
+        return "question:list:" + DigestUtils.md5DigestAsHex(source.getBytes(StandardCharsets.UTF_8));
     }
 
 
@@ -346,6 +417,9 @@ public class QuestionController {
         if (tags != null) {
             question.setTags(JSONUtil.toJsonStr(tags));
         }
+        if (StrUtil.isBlank(question.getDifficulty())) {
+            question.setDifficulty(QuestionDifficultyEnum.MEDIUM.getValue());
+        }
         // 数据校验
         questionService.validQuestion(question, false);
         User loginUser = userService.getLoginUser(request);
@@ -360,6 +434,7 @@ public class QuestionController {
         // 操作数据库
         boolean result = questionService.updateById(question);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        questionListLocalCache.invalidateAll();
         return ResultUtils.success(true);
     }
 
@@ -392,6 +467,7 @@ public class QuestionController {
     public BaseResponse<Boolean> batchDeleteQuestions(@RequestBody QuestionBatchDeleteRequest questionBatchDeleteRequest) {
         ThrowUtils.throwIf(questionBatchDeleteRequest == null, ErrorCode.PARAMS_ERROR);
         questionService.batchDeleteQuestions(questionBatchDeleteRequest.getQuestionIdList());
+        questionListLocalCache.invalidateAll();
         return ResultUtils.success(true);
     }
 
@@ -414,6 +490,7 @@ public class QuestionController {
         User loginUser = userService.getLoginUser(request);
         // 调用 AI 生成题目服务
         questionService.aiGenerateQuestions(questionType, number, loginUser);
+        questionListLocalCache.invalidateAll();
         // 返回结果
         return ResultUtils.success(true);
     }

@@ -1,14 +1,8 @@
 package com.yupi.mianshiya.config;
 
-import com.volcengine.ark.runtime.service.ArkService;
 import lombok.Data;
-import okhttp3.ConnectionPool;
-import okhttp3.Dispatcher;
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.util.concurrent.TimeUnit;
+import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @Configuration
 @ConfigurationProperties(prefix = "ai")
@@ -19,18 +13,13 @@ public class AiConfig {
     private String apiKey;
 
     /**
-     * AI 请求客户端
-     *
-     * @return
+     * 兼容 OpenAI 协议的基础地址，默认使用阿里云百炼兼容模式。
      */
-    @Bean
-    public ArkService aiService() {
-        ConnectionPool connectionPool = new ConnectionPool(5, 1, TimeUnit.SECONDS);
-        Dispatcher dispatcher = new Dispatcher();
-        ArkService service = ArkService.builder().dispatcher(dispatcher).connectionPool(connectionPool)
-                .baseUrl("https://ark.cn-beijing.volces.com/api/v3")
-                .apiKey(apiKey)
-                .build();
-        return service;
-    }
+    private String baseUrl;
+
+    /**
+     * 默认模型。
+     */
+    private String model;
+
 }

@@ -1,7 +1,84 @@
-.ant-pro-layout .ant-pro-layout-content {
-  padding-bottom: 96px !important;
+#basicLayout {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(210, 227, 210, 0.72), transparent 34%),
+    radial-gradient(circle at top right, rgba(241, 225, 198, 0.5), transparent 28%),
+    linear-gradient(180deg, #f6f2e8 0%, #f4f6ef 42%, #eef3ea 100%);
+}
+
+.ant-pro-layout {
+  background: transparent !important;
 }
 
 .ant-pro-layout-top {
-  height: 100%;
+  min-height: 100vh;
+}
+
+.ant-pro-layout-top .ant-layout-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(248, 244, 236, 0.72) !important;
+  backdrop-filter: blur(18px);
+  border-bottom: 1px solid rgba(117, 135, 110, 0.14);
+  box-shadow: 0 12px 36px rgba(113, 126, 96, 0.08);
+}
+
+.ant-pro-layout-top .ant-pro-top-nav-header {
+  background: transparent !important;
+  padding-inline: 18px;
+}
+
+.ant-pro-layout-top .ant-menu {
+  background: transparent !important;
+  border-bottom: 0 !important;
+}
+
+.ant-pro-layout-top .ant-menu-item,
+.ant-pro-layout-top .ant-menu-submenu-title {
+  color: var(--muted-text) !important;
+  border-radius: 999px;
+  transition: all 0.2s ease;
+}
+
+.ant-pro-layout-top .ant-menu-item:hover,
+.ant-pro-layout-top .ant-menu-submenu-title:hover {
+  color: var(--text-color) !important;
+  background: rgba(152, 169, 143, 0.12) !important;
+}
+
+.ant-pro-layout-top .ant-menu-item-selected {
+  color: var(--text-color) !important;
+  background: rgba(152, 169, 143, 0.18) !important;
+}
+
+.ant-pro-layout-top .ant-menu-item::after {
+  display: none !important;
+}
+
+.ant-pro-layout .ant-pro-layout-content {
+  padding: 28px 0 120px !important;
+}
+
+.ant-pro-layout .ant-layout-content {
+  background: transparent;
+}
+
+.ant-pro-global-header-collapsed-button,
+.ant-pro-global-header-header-actions-item {
+  color: var(--text-color) !important;
+}
+
+.basic-layout-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-color);
+}
+
+.basic-layout-brand-text {
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }

@@ -10,10 +10,10 @@ export default function GlobalFooter() {
 
   return (
     <div className="global-footer">
-      <div>© {currentYear} 面试刷题平台</div>
+      <div>© {currentYear} 面试通</div>
       <div>
         <a href="https://www.code-nav.cn" target="_blank">
-          作者：编程导航 - 程序员鱼皮
+          开源学习支持：编程导航
         </a>
       </div>
     </div>

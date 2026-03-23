@@ -1,6 +1,7 @@
 package com.yupi.mianshiya.sentinel;
 
 import cn.hutool.core.io.FileUtil;
+import cn.hutool.core.util.StrUtil;
 import com.alibaba.csp.sentinel.datasource.*;
 import com.alibaba.csp.sentinel.slots.block.degrade.DegradeRule;
 import com.alibaba.csp.sentinel.slots.block.degrade.DegradeRuleManager;
@@ -102,6 +103,8 @@ public class SentinelRulesManager {
         // 规则文件路径
         String flowRulePath = new File(sentinelDir, "FlowRule.json").getAbsolutePath();
         String degradeRulePath = new File(sentinelDir, "DegradeRule.json").getAbsolutePath();
+        bootstrapRuleFile(flowRulePath, encodeJson(FlowRuleManager.getRules()));
+        bootstrapRuleFile(degradeRulePath, encodeJson(DegradeRuleManager.getRules()));
 
         // Data source for FlowRule
         ReadableDataSource<String, List<FlowRule>> flowRuleDataSource = new FileRefreshableDataSource<>(flowRulePath, flowRuleListParser);
@@ -130,5 +133,17 @@ public class SentinelRulesManager {
 
     private <T> String encodeJson(T t) {
         return JSON.toJSONString(t);
+    }
+
+    private void bootstrapRuleFile(String filePath, String defaultContent) {
+        File ruleFile = new File(filePath);
+        if (!FileUtil.exist(ruleFile)) {
+            FileUtil.writeUtf8String(defaultContent, ruleFile);
+            return;
+        }
+        String currentContent = FileUtil.readUtf8String(ruleFile);
+        if (StrUtil.isBlank(currentContent) || "[]".equals(currentContent.trim())) {
+            FileUtil.writeUtf8String(defaultContent, ruleFile);
+        }
     }
 }

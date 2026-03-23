@@ -38,6 +38,10 @@ export default function BasicLayout({ children }: Props) {
     setMounted(true);
   }, []);
 
+  useEffect(() => {
+    document.title = "面试通";
+  }, [pathname]);
+
   /**
    * 用户注销
    */
@@ -63,14 +67,14 @@ export default function BasicLayout({ children }: Props) {
       {!mounted ? <div>{children}</div> : null}
       {mounted ? (
       <ProLayout
-        title="面试鸭刷题平台"
+        title="面试通"
         layout="top"
         logo={
           <Image
             src="/assets/logo.png"
             height={32}
             width={32}
-            alt="面试鸭刷题网站 - 程序员鱼皮"
+            alt="面试通"
           />
         }
         location={{
@@ -79,7 +83,7 @@ export default function BasicLayout({ children }: Props) {
         avatarProps={{
           src: loginUser.userAvatar || "/assets/logo.png",
           size: "small",
-          title: loginUser.userName || "鱼皮鸭",
+          title: loginUser.userName || "面试通用户",
           render: (props, dom) => {
             if (!loginUser.id) {
               return (
@@ -137,9 +141,9 @@ export default function BasicLayout({ children }: Props) {
         }}
         headerTitleRender={(logo, title, _) => {
           return (
-            <a>
+            <a className="basic-layout-brand">
               {logo}
-              {title}
+              <span className="basic-layout-brand-text">{title}</span>
             </a>
           );
         }}

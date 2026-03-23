@@ -52,7 +52,7 @@ export async function handleMockInterviewEventUsingPost(
   body: API.MockInterviewEventRequest,
   options?: { [key: string]: any },
 ) {
-  return request<API.BaseResponseString_>('/api/mockInterview/handleEvent', {
+  return request<API.BaseResponseMockInterviewEventResponse_>('/api/mockInterview/handleEvent', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

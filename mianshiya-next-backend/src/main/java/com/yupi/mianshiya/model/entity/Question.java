@@ -47,6 +47,11 @@ public class Question implements Serializable {
     private String answer;
 
     /**
+     * 题目难度（easy / medium / hard）。
+     */
+    private String difficulty;
+
+    /**
      * 创建人用户 id（用于数据归属与权限校验）。
      */
     private Long userId;

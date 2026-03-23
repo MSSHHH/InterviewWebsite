@@ -103,7 +103,7 @@ public class QuestionBankServiceImpl extends ServiceImpl<QuestionBankMapper, Que
         queryWrapper.eq(ObjectUtils.isNotEmpty(picture), "picture", picture);
         // 排序规则
         queryWrapper.orderBy(SqlUtils.validSortField(sortField),
-                sortOrder.equals(CommonConstant.SORT_ORDER_ASC),
+                CommonConstant.SORT_ORDER_ASC.equals(sortOrder),
                 sortField);
         return queryWrapper;
     }

@@ -35,6 +35,12 @@ declare namespace API {
     message?: string;
   };
 
+  type BaseResponseMockInterviewEventResponse_ = {
+    code?: number;
+    data?: MockInterviewEventResponse;
+    message?: string;
+  };
+
   type BaseResponsePageMockInterview_ = {
     code?: number;
     data?: PageMockInterview_;
@@ -265,7 +271,10 @@ declare namespace API {
     isDelete?: number;
     jobPosition?: string;
     messages?: string;
+    questionBankId?: number;
+    report?: string;
     status?: number;
+    topic?: string;
     updateTime?: string;
     userId?: number;
     workExperience?: string;
@@ -274,7 +283,14 @@ declare namespace API {
   type MockInterviewAddRequest = {
     difficulty?: string;
     jobPosition?: string;
+    questionBankId?: number;
+    topic?: string;
     workExperience?: string;
+  };
+
+  type MockInterviewEventResponse = {
+    aiResponse?: string;
+    mockInterview?: MockInterview;
   };
 
   type MockInterviewEventRequest = {
@@ -289,9 +305,11 @@ declare namespace API {
     id?: number;
     jobPosition?: string;
     pageSize?: number;
+    questionBankId?: number;
     sortField?: string;
     sortOrder?: string;
     status?: number;
+    topic?: string;
     userId?: number;
     workExperience?: string;
   };
@@ -529,6 +547,7 @@ declare namespace API {
     answer?: string;
     content?: string;
     createTime?: string;
+    difficulty?: string;
     editTime?: string;
     id?: number;
     isDelete?: number;
@@ -541,6 +560,7 @@ declare namespace API {
   type QuestionAddRequest = {
     answer?: string;
     content?: string;
+    difficulty?: string;
     tags?: string[];
     title?: string;
   };
@@ -674,6 +694,7 @@ declare namespace API {
   type QuestionEditRequest = {
     answer?: string;
     content?: string;
+    difficulty?: string;
     id?: number;
     tags?: string[];
     title?: string;
@@ -683,6 +704,7 @@ declare namespace API {
     answer?: string;
     content?: string;
     current?: number;
+    difficulty?: string;
     id?: number;
     notId?: number;
     pageSize?: number;
@@ -698,6 +720,7 @@ declare namespace API {
   type QuestionUpdateRequest = {
     answer?: string;
     content?: string;
+    difficulty?: string;
     id?: number;
     tags?: string[];
     title?: string;
@@ -707,6 +730,7 @@ declare namespace API {
     answer?: string;
     content?: string;
     createTime?: string;
+    difficulty?: string;
     id?: number;
     tagList?: string[];
     title?: string;

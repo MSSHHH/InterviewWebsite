@@ -12,6 +12,7 @@ import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewAddRequest;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewEventRequest;
+import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewEventResponse;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewQueryRequest;
 import com.yupi.mianshiya.model.entity.MockInterview;
 import com.yupi.mianshiya.model.entity.Post;
@@ -177,13 +178,13 @@ public class MockInterviewController {
      * @return AI 给出的回复
      */
     @PostMapping("/handleEvent")
-    public BaseResponse<String> handleMockInterviewEvent(@RequestBody MockInterviewEventRequest mockInterviewEventRequest,
-                                                         HttpServletRequest request) {
+    public BaseResponse<MockInterviewEventResponse> handleMockInterviewEvent(@RequestBody MockInterviewEventRequest mockInterviewEventRequest,
+                                                                             HttpServletRequest request) {
         // 获取当前登录用户
         User loginUser = userService.getLoginUser(request);
         // 调用 Service 处理模拟面试事件
-        String aiResponse = mockInterviewService.handleMockInterviewEvent(mockInterviewEventRequest, loginUser);
+        MockInterviewEventResponse eventResponse = mockInterviewService.handleMockInterviewEvent(mockInterviewEventRequest, loginUser);
         // 返回 AI 的回复
-        return ResultUtils.success(aiResponse);
+        return ResultUtils.success(eventResponse);
     }
 }

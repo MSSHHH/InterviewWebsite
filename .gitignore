@@ -151,6 +151,7 @@ output/logs/
 *.pid
 *.out
 derby.log
+.tmp*
 
 ### Service runtime logs
 sentinel/*.log
@@ -158,6 +159,9 @@ sentinel/*.pid
 hotkey/*.log
 hotkey/*.pid
 nacos/nacos/logs/
+
+### Frontend local build backups
+mianshiya-next-frontend/.next.bak.*/
 
 ### Nacos local runtime data
 nacos/nacos/data/derby-data/

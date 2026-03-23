@@ -213,4 +213,6 @@ knife4j:
           - com.yupi.mianshiya.controller
 # AI 大模型接入（目前是火山引擎 DeepSeek）
 ai:
-  apiKey: ${OPENAI_API_KEY:}
+  apiKey: ${DASHSCOPE_API_KEY:${AI_API_KEY:}}
+  baseUrl: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  model: ${AI_MODEL:qwen-plus}

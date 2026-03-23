@@ -1,2 +1,16 @@
-.question-table {
+.question-table .ant-pro-table-search {
+  padding: 20px 22px 2px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  background: rgba(252, 249, 242, 0.78) !important;
+  box-shadow: var(--shadow-soft);
+}
+
+.question-table .ant-table-wrapper,
+.question-table .ant-pro-card {
+  border-radius: var(--radius-xl);
+}
+
+.question-table .ant-table {
+  background: rgba(255, 252, 246, 0.82);
 }

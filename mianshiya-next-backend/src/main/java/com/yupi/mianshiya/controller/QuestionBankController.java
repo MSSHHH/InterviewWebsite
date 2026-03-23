@@ -189,23 +189,17 @@ public class QuestionBankController {
         ThrowUtils.throwIf(questionBankQueryRequest == null, ErrorCode.PARAMS_ERROR);
         Long id = questionBankQueryRequest.getId();
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
-        boolean needQueryQuestionList = questionBankQueryRequest.isNeedQueryQuestionList();
-        String detailCacheKey = buildQuestionBankDetailCacheKey(questionBankQueryRequest);
 
-        // Caffeine 本地缓存优先
-        QuestionBankVO localCachedQuestionBankVO = questionBankDetailLocalCache.getIfPresent(detailCacheKey);
-        if (localCachedQuestionBankVO != null) {
-            return ResultUtils.success(localCachedQuestionBankVO);
-        }
-
-        // HotKey 仅对“无题目分页参数”的详情请求生效
-        String hotKey = "bank_detail_" + id;
-        if (!needQueryQuestionList && JdHotKeyStore.isHotKey(hotKey)) {
-            Object hotKeyCachedQuestionBankVO = JdHotKeyStore.get(hotKey);
-            if (hotKeyCachedQuestionBankVO != null) {
-                QuestionBankVO hotValue = (QuestionBankVO) hotKeyCachedQuestionBankVO;
-                questionBankDetailLocalCache.put(detailCacheKey, hotValue);
-                return ResultUtils.success(hotValue);
+//         todo 取消注释开启 HotKey（须确保 HotKey 依赖被打进 jar 包）
+        // 生成 key
+        String key = "bank_detail_" + id;
+        // 如果是热 key
+        if (JdHotKeyStore.isHotKey(key)) {
+            // 从本地缓存中获取缓存值
+            Object cachedQuestionBankVO = JdHotKeyStore.get(key);
+            if (cachedQuestionBankVO != null) {
+                // 如果缓存中有值，直接返回缓存的值
+                return ResultUtils.success((QuestionBankVO) cachedQuestionBankVO);
             }
         }
 
@@ -214,6 +208,8 @@ public class QuestionBankController {
         ThrowUtils.throwIf(questionBank == null, ErrorCode.NOT_FOUND_ERROR);
         // 查询题库封装类
         QuestionBankVO questionBankVO = questionBankService.getQuestionBankVO(questionBank, request);
+        // 是否要关联查询题库下的题目列表
+        boolean needQueryQuestionList = questionBankQueryRequest.isNeedQueryQuestionList();
         if (needQueryQuestionList) {
             QuestionQueryRequest questionQueryRequest = new QuestionQueryRequest();
             questionQueryRequest.setQuestionBankId(id);
@@ -225,12 +221,9 @@ public class QuestionBankController {
             questionBankVO.setQuestionPage(questionVOPage);
         }
 
-        // 设置 Caffeine 本地缓存
-        questionBankDetailLocalCache.put(detailCacheKey, questionBankVO);
-        // 设置 HotKey 缓存（仅针对详情页）
-        if (!needQueryQuestionList) {
-            JdHotKeyStore.smartSet(hotKey, questionBankVO);
-        }
+        // todo 取消注释开启 HotKey（须确保 HotKey 依赖被打进 jar 包）
+        // 设置本地缓存（如果不是热 key，这个方法不会设置缓存）
+        JdHotKeyStore.smartSet(key, questionBankVO);
 
         // 获取封装类
         return ResultUtils.success(questionBankVO);

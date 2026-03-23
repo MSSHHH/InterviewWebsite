@@ -17,11 +17,21 @@ export const menus = [
     name: "题目",
   },
   {
-    path: "/mockInterview/add",
     name: "AI 模拟面试",
+    path: "/mockInterview",
+    children: [
+      {
+        path: "/mockInterview",
+        name: "历史记录",
+      },
+      {
+        path: "/mockInterview/add",
+        name: "创建面试",
+      },
+    ],
   },
   {
-    name: "面试鸭",
+    name: "面试通官网",
     path: "https://mianshiya.com",
     target: "_blank",
   },

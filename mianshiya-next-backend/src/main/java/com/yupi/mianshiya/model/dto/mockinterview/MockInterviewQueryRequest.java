@@ -37,6 +37,16 @@ public class MockInterviewQueryRequest extends PageRequest implements Serializab
     private String difficulty;
 
     /**
+     * 面试方向
+     */
+    private String topic;
+
+    /**
+     * 题库 id
+     */
+    private Long questionBankId;
+
+    /**
      * 状态（0-待开始、1-进行中、2-已结束）
      */
     private Integer status;

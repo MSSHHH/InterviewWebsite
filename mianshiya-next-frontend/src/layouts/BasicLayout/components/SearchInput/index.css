@@ -1,3 +1,12 @@
 .search-input {
+  margin-inline-end: 24px;
+}
 
+.search-input .ant-input-search {
+  min-width: 260px;
+}
+
+.search-input .ant-input-group .ant-input,
+.search-input .ant-input-search-button {
+  height: 40px;
 }

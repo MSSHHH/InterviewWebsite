@@ -54,6 +54,11 @@ public class QuestionQueryRequest extends PageRequest implements Serializable {
     private String answer;
 
     /**
+     * 题目难度（easy / medium / hard）
+     */
+    private String difficulty;
+
+    /**
      * 题库 id（限定只查询某题库下的题目）。
      */
     private Long questionBankId;
