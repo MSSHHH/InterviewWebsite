@@ -12,24 +12,24 @@ import com.yupi.mianshiya.common.BaseResponse;
 import com.yupi.mianshiya.common.DeleteRequest;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.common.ResultUtils;
+import com.yupi.mianshiya.constant.RedisConstant;
 import com.yupi.mianshiya.constant.UserConstant;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
-import com.yupi.mianshiya.model.dto.question.QuestionQueryRequest;
 import com.yupi.mianshiya.model.dto.questionBank.QuestionBankAddRequest;
 import com.yupi.mianshiya.model.dto.questionBank.QuestionBankEditRequest;
 import com.yupi.mianshiya.model.dto.questionBank.QuestionBankQueryRequest;
 import com.yupi.mianshiya.model.dto.questionBank.QuestionBankUpdateRequest;
-import com.yupi.mianshiya.model.entity.Question;
 import com.yupi.mianshiya.model.entity.QuestionBank;
 import com.yupi.mianshiya.model.entity.User;
 import com.yupi.mianshiya.model.vo.QuestionBankVO;
-import com.yupi.mianshiya.model.vo.QuestionVO;
 import com.yupi.mianshiya.sentinel.SentinelConstant;
 import com.yupi.mianshiya.service.QuestionBankService;
-import com.yupi.mianshiya.service.QuestionService;
 import com.yupi.mianshiya.service.UserService;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBucket;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.util.DigestUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
@@ -37,6 +37,8 @@ import org.springframework.web.bind.annotation.*;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -61,6 +63,16 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class QuestionBankController {
 
+    private static final long QUESTION_BANK_DETAIL_REDIS_TTL_SECONDS = 30 * 60L;
+
+    private static final long QUESTION_BANK_DETAIL_LOCK_WAIT_SECONDS = 2L;
+
+    private static final long QUESTION_BANK_DETAIL_LOCK_LEASE_SECONDS = 10L;
+
+    private static final int QUESTION_BANK_DETAIL_RETRY_TIMES = 3;
+
+    private static final long QUESTION_BANK_DETAIL_RETRY_MILLIS = 100L;
+
     /**
      * 题库详情本地缓存（配合 HotKey，兜底快速读取）
      */
@@ -79,14 +91,19 @@ public class QuestionBankController {
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .build();
 
+    /**
+     * 记录当前节点已经写入过的题库详情 HotKey，便于题库更新时按题库维度主动失效分页变体。
+     */
+    private final Set<String> questionBankDetailHotKeys = ConcurrentHashMap.newKeySet();
+
     @Resource
     private QuestionBankService questionBankService;
 
     @Resource
-    private QuestionService questionService;
+    private UserService userService;
 
     @Resource
-    private UserService userService;
+    private RedissonClient redissonClient;
 
     // region 增删改查
 
@@ -189,44 +206,64 @@ public class QuestionBankController {
         ThrowUtils.throwIf(questionBankQueryRequest == null, ErrorCode.PARAMS_ERROR);
         Long id = questionBankQueryRequest.getId();
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        String detailCacheKey = buildQuestionBankDetailCacheKey(id);
+        QuestionBankVO localCachedQuestionBankVO = questionBankDetailLocalCache.getIfPresent(detailCacheKey);
+        if (localCachedQuestionBankVO != null) {
+            return ResultUtils.success(localCachedQuestionBankVO);
+        }
 
-//         todo 取消注释开启 HotKey（须确保 HotKey 依赖被打进 jar 包）
-        // 生成 key
-        String key = "bank_detail_" + id;
-        // 如果是热 key
-        if (JdHotKeyStore.isHotKey(key)) {
-            // 从本地缓存中获取缓存值
-            Object cachedQuestionBankVO = JdHotKeyStore.get(key);
-            if (cachedQuestionBankVO != null) {
-                // 如果缓存中有值，直接返回缓存的值
-                return ResultUtils.success((QuestionBankVO) cachedQuestionBankVO);
+        String hotKey = buildQuestionBankHotKey(questionBankQueryRequest);
+        if (hotKey != null && isHotKey(hotKey)) {
+            QuestionBankVO hotCachedQuestionBankVO = getHotKeyValue(hotKey);
+            if (hotCachedQuestionBankVO != null) {
+                questionBankDetailLocalCache.put(detailCacheKey, hotCachedQuestionBankVO);
+                return ResultUtils.success(hotCachedQuestionBankVO);
             }
         }
 
-        // 查询数据库
-        QuestionBank questionBank = questionBankService.getById(id);
-        ThrowUtils.throwIf(questionBank == null, ErrorCode.NOT_FOUND_ERROR);
-        // 查询题库封装类
-        QuestionBankVO questionBankVO = questionBankService.getQuestionBankVO(questionBank, request);
-        // 是否要关联查询题库下的题目列表
-        boolean needQueryQuestionList = questionBankQueryRequest.isNeedQueryQuestionList();
-        if (needQueryQuestionList) {
-            QuestionQueryRequest questionQueryRequest = new QuestionQueryRequest();
-            questionQueryRequest.setQuestionBankId(id);
-            // 可以按需支持更多的题目搜索参数，比如分页
-            questionQueryRequest.setPageSize(questionBankQueryRequest.getPageSize());
-            questionQueryRequest.setCurrent(questionBankQueryRequest.getCurrent());
-            Page<Question> questionPage = questionService.listQuestionByPage(questionQueryRequest);
-            Page<QuestionVO> questionVOPage = questionService.getQuestionVOPage(questionPage, request);
-            questionBankVO.setQuestionPage(questionVOPage);
+        String redisKey = RedisConstant.getQuestionBankDetailRedisKey(detailCacheKey);
+        QuestionBankVO redisCachedQuestionBankVO = getSharedQuestionBankDetail(redisKey);
+        if (redisCachedQuestionBankVO != null) {
+            cacheQuestionBankDetail(detailCacheKey, hotKey, redisCachedQuestionBankVO);
+            return ResultUtils.success(redisCachedQuestionBankVO);
         }
 
-        // todo 取消注释开启 HotKey（须确保 HotKey 依赖被打进 jar 包）
-        // 设置本地缓存（如果不是热 key，这个方法不会设置缓存）
-        JdHotKeyStore.smartSet(key, questionBankVO);
+        String lockKey = RedisConstant.getQuestionBankDetailLockKey(detailCacheKey);
+        RLock lock = redissonClient.getLock(lockKey);
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(QUESTION_BANK_DETAIL_LOCK_WAIT_SECONDS, QUESTION_BANK_DETAIL_LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
+            if (!locked) {
+                QuestionBankVO waitedQuestionBankVO = waitForSharedQuestionBankDetail(redisKey, detailCacheKey, hotKey);
+                if (waitedQuestionBankVO != null) {
+                    return ResultUtils.success(waitedQuestionBankVO);
+                }
+                log.warn("question bank detail lock not acquired, fallback to direct load, id={}", id);
+                QuestionBankVO fallbackQuestionBankVO = loadQuestionBankVO(id, request);
+                cacheSharedQuestionBankDetail(redisKey, fallbackQuestionBankVO);
+                cacheQuestionBankDetail(detailCacheKey, hotKey, fallbackQuestionBankVO);
+                return ResultUtils.success(fallbackQuestionBankVO);
+            }
 
-        // 获取封装类
-        return ResultUtils.success(questionBankVO);
+            // double check，避免其他节点已填充共享缓存
+            redisCachedQuestionBankVO = getSharedQuestionBankDetail(redisKey);
+            if (redisCachedQuestionBankVO != null) {
+                cacheQuestionBankDetail(detailCacheKey, hotKey, redisCachedQuestionBankVO);
+                return ResultUtils.success(redisCachedQuestionBankVO);
+            }
+
+            QuestionBankVO loadedQuestionBankVO = loadQuestionBankVO(id, request);
+            cacheSharedQuestionBankDetail(redisKey, loadedQuestionBankVO);
+            cacheQuestionBankDetail(detailCacheKey, hotKey, loadedQuestionBankVO);
+            return ResultUtils.success(loadedQuestionBankVO);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "获取题库详情缓存锁失败");
+        } finally {
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
     }
 
     /**
@@ -376,19 +413,22 @@ public class QuestionBankController {
         }
         // 一次题库变更可能影响不同 detail 参数组合，直接全量失效更安全
         questionBankDetailLocalCache.invalidateAll();
+        String hotKeyPrefix = buildQuestionBankHotKeyPrefix(questionBankId);
+        for (String hotKey : questionBankDetailHotKeys) {
+            if (hotKey.startsWith(hotKeyPrefix)) {
+                removeHotKey(hotKey);
+                questionBankDetailHotKeys.remove(hotKey);
+            }
+        }
+        redissonClient.getKeys().deleteByPattern(RedisConstant.getQuestionBankDetailRedisPattern(questionBankId));
     }
 
     private void clearQuestionBankListCache() {
         questionBankListLocalCache.invalidateAll();
     }
 
-    private String buildQuestionBankDetailCacheKey(QuestionBankQueryRequest questionBankQueryRequest) {
-        String source = String.format("id=%s|needQuery=%s|current=%s|size=%s",
-                questionBankQueryRequest.getId(),
-                questionBankQueryRequest.isNeedQueryQuestionList(),
-                questionBankQueryRequest.getCurrent(),
-                questionBankQueryRequest.getPageSize());
-        return "question_bank:detail:" + DigestUtils.md5DigestAsHex(source.getBytes(StandardCharsets.UTF_8));
+    private String buildQuestionBankDetailCacheKey(Long questionBankId) {
+        return String.format("question_bank:detail:id=%s", questionBankId);
     }
 
     private String buildQuestionBankListCacheKey(QuestionBankQueryRequest questionBankQueryRequest) {
@@ -406,5 +446,84 @@ public class QuestionBankController {
                 questionBankQueryRequest.getSortField(),
                 questionBankQueryRequest.getSortOrder());
         return "question_bank:list:" + DigestUtils.md5DigestAsHex(source.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private QuestionBankVO loadQuestionBankVO(Long id, HttpServletRequest request) {
+        QuestionBank questionBank = questionBankService.getById(id);
+        ThrowUtils.throwIf(questionBank == null, ErrorCode.NOT_FOUND_ERROR);
+        return questionBankService.getQuestionBankVO(questionBank, request);
+    }
+
+    private QuestionBankVO getSharedQuestionBankDetail(String redisKey) {
+        RBucket<QuestionBankVO> bucket = redissonClient.getBucket(redisKey);
+        return bucket.get();
+    }
+
+    private void cacheSharedQuestionBankDetail(String redisKey, QuestionBankVO questionBankVO) {
+        RBucket<QuestionBankVO> bucket = redissonClient.getBucket(redisKey);
+        bucket.set(questionBankVO, QUESTION_BANK_DETAIL_REDIS_TTL_SECONDS, TimeUnit.SECONDS);
+    }
+
+    private void cacheQuestionBankDetail(String detailCacheKey, String hotKey, QuestionBankVO questionBankVO) {
+        questionBankDetailLocalCache.put(detailCacheKey, questionBankVO);
+        if (hotKey != null) {
+            questionBankDetailHotKeys.add(hotKey);
+            smartSetHotKey(hotKey, questionBankVO);
+        }
+    }
+
+    private QuestionBankVO waitForSharedQuestionBankDetail(String redisKey, String detailCacheKey, String hotKey) {
+        for (int i = 0; i < QUESTION_BANK_DETAIL_RETRY_TIMES; i++) {
+            try {
+                TimeUnit.MILLISECONDS.sleep(QUESTION_BANK_DETAIL_RETRY_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+            QuestionBankVO redisCachedQuestionBankVO = getSharedQuestionBankDetail(redisKey);
+            if (redisCachedQuestionBankVO != null) {
+                cacheQuestionBankDetail(detailCacheKey, hotKey, redisCachedQuestionBankVO);
+                return redisCachedQuestionBankVO;
+            }
+        }
+        return null;
+    }
+
+    protected String buildQuestionBankHotKey(QuestionBankQueryRequest questionBankQueryRequest) {
+        if (questionBankQueryRequest == null || questionBankQueryRequest.getId() == null) {
+            return null;
+        }
+        return String.format("bank_detail_id=%s", questionBankQueryRequest.getId());
+    }
+
+    protected String buildQuestionBankHotKeyPrefix(Long questionBankId) {
+        if (questionBankId == null) {
+            return null;
+        }
+        return "bank_detail_id=" + questionBankId + "|";
+    }
+
+    protected boolean isHotKey(String key) {
+        return JdHotKeyStore.isHotKey(key);
+    }
+
+    @SuppressWarnings("unchecked")
+    protected QuestionBankVO getHotKeyValue(String key) {
+        Object cachedValue = JdHotKeyStore.get(key);
+        if (cachedValue == null) {
+            return null;
+        }
+        return (QuestionBankVO) cachedValue;
+    }
+
+    protected void smartSetHotKey(String key, QuestionBankVO questionBankVO) {
+        JdHotKeyStore.smartSet(key, questionBankVO);
+    }
+
+    protected void removeHotKey(String key) {
+        if (key == null) {
+            return;
+        }
+        JdHotKeyStore.remove(key);
     }
 }

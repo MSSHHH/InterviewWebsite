@@ -3,14 +3,13 @@ package com.yupi.mianshiya.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.manager.AiManager;
+import com.yupi.mianshiya.model.dto.ai.AiToolCall;
 import com.yupi.mianshiya.model.dto.mockinterview.InterviewToolCallContext;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewAddRequest;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewReport;
 import com.yupi.mianshiya.model.entity.MockInterview;
 import com.yupi.mianshiya.model.entity.User;
 import com.yupi.mianshiya.service.impl.MockInterviewServiceImpl;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
-import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -52,6 +51,7 @@ class MockInterviewServiceImplTest {
         request.setJobPosition("Java 开发工程师");
         request.setTopic("Java 并发");
         request.setDifficulty("expert");
+        request.setQuestionBankId(1L);
         User user = new User();
         user.setId(1L);
 
@@ -70,18 +70,16 @@ class MockInterviewServiceImplTest {
         context.getAskedQuestionIds().add(102L);
         doReturn(true).when(mockInterviewService).updateById(any(MockInterview.class));
 
-        ChatFunctionCall functionCall = new ChatFunctionCall();
-        functionCall.setName("finish_interview_and_generate_report");
-        functionCall.setArguments("{\"overallScore\":85,\"summary\":\"整体表现稳定\",\"strengths\":[\"基础扎实\"],\"weaknesses\":[\"表达略慢\"],\"suggestions\":[\"增加高并发实战\"],\"finalMessage\":\"这场面试先到这里。\"}");
-        ChatToolCall chatToolCall = new ChatToolCall();
-        chatToolCall.setId("tool_1");
-        chatToolCall.setType("function");
-        chatToolCall.setFunction(functionCall);
+        AiToolCall toolCall = AiToolCall.builder()
+                .id("tool_1")
+                .name("finish_interview_and_generate_report")
+                .arguments("{\"overallScore\":85,\"summary\":\"整体表现稳定\",\"strengths\":[\"基础扎实\"],\"weaknesses\":[\"表达略慢\"],\"suggestions\":[\"增加高并发实战\"],\"finalMessage\":\"这场面试先到这里。\"}")
+                .build();
 
         String toolResult = ReflectionTestUtils.invokeMethod(
                 mockInterviewService,
                 "executeInterviewToolCall",
-                chatToolCall,
+                toolCall,
                 mockInterview,
                 context
         );

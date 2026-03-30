@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, Flex, Menu, Spin } from "antd";
 import { getQuestionBankVoByIdUsingGet } from "@/api/questionBankController";
 import Title from "antd/es/typography/Title";
-import { getQuestionVoByIdUsingGet } from "@/api/questionController";
+import { getQuestionVoByIdUsingGet, listQuestionVoByPageUsingPost } from "@/api/questionController";
 import Sider from "antd/es/layout/Sider";
 import { Content } from "antd/es/layout/layout";
 import QuestionCard from "@/components/QuestionCard";
@@ -20,8 +20,10 @@ export default function BankQuestionPage({
 }: {
   params: { questionBankId: string; questionId: string };
 }) {
+  const FIRST_PAGE_SIZE = 20;
   const { questionBankId, questionId } = params;
   const [bank, setBank] = useState<API.QuestionBankVO>();
+  const [questionList, setQuestionList] = useState<API.QuestionVO[]>([]);
   const [question, setQuestion] = useState<API.QuestionVO>();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -31,17 +33,21 @@ export default function BankQuestionPage({
       setLoading(true);
       setLoadError("");
       try {
-        const [bankRes, questionRes] = await Promise.all([
+        const [bankRes, questionListRes, questionRes] = await Promise.all([
           getQuestionBankVoByIdUsingGet({
-            id: questionBankId,
-            needQueryQuestionList: true,
-            pageSize: 200,
+            id: Number(questionBankId),
           }) as Promise<API.BaseResponseQuestionBankVO_>,
+          listQuestionVoByPageUsingPost({
+            questionBankId: Number(questionBankId),
+            current: 1,
+            pageSize: FIRST_PAGE_SIZE,
+          }) as Promise<API.BaseResponsePageQuestionVO_>,
           getQuestionVoByIdUsingGet({
-            id: questionId,
+            id: Number(questionId),
           }) as Promise<API.BaseResponseQuestionVO_>,
         ]);
         setBank(bankRes.data);
+        setQuestionList(questionListRes.data?.records ?? []);
         setQuestion(questionRes.data);
       } catch (e: any) {
         const errorMessage = "获取题目详情失败，请刷新重试";
@@ -73,7 +79,7 @@ export default function BankQuestionPage({
     return <div>{loadError || "获取题目详情失败，请刷新重试"}</div>;
   }
 
-  const questionMenuItemList = (bank.questionPage?.records || []).map((q) => {
+  const questionMenuItemList = questionList.map((q) => {
     return {
       label: (
         <Link href={`/bank/${questionBankId}/question/${q.id}`}>{q.title}</Link>

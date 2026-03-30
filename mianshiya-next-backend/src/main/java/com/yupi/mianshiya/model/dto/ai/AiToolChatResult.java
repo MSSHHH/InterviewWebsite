@@ -1,7 +1,5 @@
 package com.yupi.mianshiya.model.dto.ai;
 
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -26,12 +24,12 @@ public class AiToolChatResult implements Serializable {
     /**
      * assistant 消息
      */
-    private ChatMessage assistantMessage;
+    private AiChatMessage assistantMessage;
 
     /**
      * tool calls
      */
-    private List<ChatToolCall> toolCalls;
+    private List<AiToolCall> toolCalls;
 
     private static final long serialVersionUID = 1L;
 }

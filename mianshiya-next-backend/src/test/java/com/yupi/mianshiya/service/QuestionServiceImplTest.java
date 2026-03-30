@@ -4,12 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.manager.AiManager;
+import com.yupi.mianshiya.model.dto.ai.AiToolCall;
 import com.yupi.mianshiya.model.dto.ai.AiToolChatResult;
 import com.yupi.mianshiya.model.entity.Question;
 import com.yupi.mianshiya.model.entity.User;
 import com.yupi.mianshiya.service.impl.QuestionServiceImpl;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
-import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -129,19 +128,16 @@ class QuestionServiceImplTest {
     }
 
     private AiToolChatResult buildToolChatResult(String arguments) {
-        ChatFunctionCall chatFunctionCall = new ChatFunctionCall();
-        chatFunctionCall.setName("submit_generated_questions");
-        chatFunctionCall.setArguments(arguments);
-
-        ChatToolCall chatToolCall = new ChatToolCall();
-        chatToolCall.setId("call_1");
-        chatToolCall.setType("function");
-        chatToolCall.setFunction(chatFunctionCall);
-
         AiToolChatResult aiToolChatResult = new AiToolChatResult();
         aiToolChatResult.setRequestId("req_1");
         aiToolChatResult.setModel("deepseek-v3-241226");
-        aiToolChatResult.setToolCalls(Collections.singletonList(chatToolCall));
+        aiToolChatResult.setToolCalls(Collections.singletonList(
+                AiToolCall.builder()
+                        .id("call_1")
+                        .name("submit_generated_questions")
+                        .arguments(arguments)
+                        .build()
+        ));
         return aiToolChatResult;
     }
 }

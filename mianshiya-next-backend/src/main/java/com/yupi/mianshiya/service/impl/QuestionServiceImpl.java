@@ -16,7 +16,9 @@ import com.yupi.mianshiya.constant.CommonConstant;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
 import com.yupi.mianshiya.manager.AiManager;
+import com.yupi.mianshiya.model.dto.ai.AiToolCall;
 import com.yupi.mianshiya.model.dto.ai.AiToolChatResult;
+import com.yupi.mianshiya.model.dto.ai.AiToolDefinition;
 import com.yupi.mianshiya.model.dto.question.GeneratedQuestionBatch;
 import com.yupi.mianshiya.model.dto.question.GeneratedQuestionItem;
 import com.yupi.mianshiya.mapper.QuestionMapper;
@@ -48,10 +50,6 @@ import org.springframework.data.elasticsearch.core.query.NativeSearchQuery;
 import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
@@ -444,7 +442,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     }
 
     private GeneratedQuestionBatch generateStructuredQuestions(String questionType, int number) {
-        ChatTool generateQuestionTool = buildGenerateQuestionTool();
+        AiToolDefinition generateQuestionTool = buildGenerateQuestionTool();
         String systemPrompt = "你是一位专业的程序员面试官，负责生成结构化面试题。\n" +
                 "你必须调用 submit_generated_questions 工具输出结果，不能返回普通文本。\n" +
                 "每道题只保留题目标题，不要附带答案、序号、解释、Markdown 标记或额外说明。\n" +
@@ -491,7 +489,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         return prompt + String.format(" 上一次返回结果不合法，原因是：%s。请严格修正后重新调用工具。", validationError);
     }
 
-    private ChatTool buildGenerateQuestionTool() {
+    private AiToolDefinition buildGenerateQuestionTool() {
         ObjectNode titleSchema = objectMapper.createObjectNode();
         titleSchema.put("type", "string");
         titleSchema.put("description", "面试题标题，只能是单行文本");
@@ -521,29 +519,24 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         required.add("questions");
         parameters.set("required", required);
 
-        ChatFunction chatFunction = new ChatFunction();
-        chatFunction.setName(AI_GENERATE_QUESTION_TOOL_NAME);
-        chatFunction.setDescription("提交结构化生成的面试题列表");
-        chatFunction.setParameters(parameters);
-
-        ChatTool chatTool = new ChatTool();
-        chatTool.setType("function");
-        chatTool.setFunction(chatFunction);
-        return chatTool;
+        return AiToolDefinition.builder()
+                .name(AI_GENERATE_QUESTION_TOOL_NAME)
+                .description("提交结构化生成的面试题列表")
+                .parameters(parameters)
+                .build();
     }
 
     private GeneratedQuestionBatch parseGeneratedQuestionBatch(AiToolChatResult aiToolChatResult) {
-        List<ChatToolCall> toolCalls = aiToolChatResult.getToolCalls();
+        List<AiToolCall> toolCalls = aiToolChatResult.getToolCalls();
         if (CollUtil.isEmpty(toolCalls)) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 未返回工具调用结果");
         }
-        ChatToolCall matchedToolCall = toolCalls.stream()
-                .filter(toolCall -> toolCall != null && toolCall.getFunction() != null)
-                .filter(toolCall -> AI_GENERATE_QUESTION_TOOL_NAME.equals(toolCall.getFunction().getName()))
+        AiToolCall matchedToolCall = toolCalls.stream()
+                .filter(Objects::nonNull)
+                .filter(toolCall -> AI_GENERATE_QUESTION_TOOL_NAME.equals(toolCall.getName()))
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(ErrorCode.OPERATION_ERROR, "AI 未返回预期工具调用结果"));
-        ChatFunctionCall functionCall = matchedToolCall.getFunction();
-        String arguments = functionCall.getArguments();
+        String arguments = matchedToolCall.getArguments();
         if (StrUtil.isBlank(arguments)) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 工具调用参数为空");
         }
@@ -614,4 +607,3 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     }
 
 }
-

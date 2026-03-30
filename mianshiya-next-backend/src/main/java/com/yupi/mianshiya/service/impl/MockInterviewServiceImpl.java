@@ -11,19 +11,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunction;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.constant.CommonConstant;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
 import com.yupi.mianshiya.manager.AiManager;
 import com.yupi.mianshiya.mapper.MockInterviewMapper;
+import com.yupi.mianshiya.model.dto.ai.AiChatMessage;
+import com.yupi.mianshiya.model.dto.ai.AiChatMessageRole;
+import com.yupi.mianshiya.model.dto.ai.AiToolCall;
 import com.yupi.mianshiya.model.dto.ai.AiToolChatResult;
+import com.yupi.mianshiya.model.dto.ai.AiToolDefinition;
 import com.yupi.mianshiya.model.dto.mockinterview.InterviewQuestionSearchResult;
 import com.yupi.mianshiya.model.dto.mockinterview.InterviewToolCallContext;
 import com.yupi.mianshiya.model.dto.mockinterview.MockInterviewAddRequest;
@@ -207,8 +205,8 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
 
     private MockInterviewEventResponse handleChatStartEvent(MockInterview mockInterview) {
         InterviewToolCallContext context = buildToolCallContext(mockInterview, Collections.emptyList());
-        List<ChatMessage> messages = buildConversationMessages(mockInterview, Collections.emptyList(), context);
-        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content("请正式开始这场模拟面试。").build());
+        List<AiChatMessage> messages = buildConversationMessages(mockInterview, Collections.emptyList(), context);
+        messages.add(buildMessage(AiChatMessageRole.USER, "请正式开始这场模拟面试。"));
         AiToolChatResult aiToolChatResult = aiManager.doToolLoopChat(
                 messages,
                 buildInterviewTools(),
@@ -228,8 +226,8 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
         ThrowUtils.throwIf(StrUtil.isBlank(userMessage), ErrorCode.PARAMS_ERROR, "消息不能为空");
         List<MockInterviewChatMessage> historyMessageList = parseHistoryMessages(mockInterview.getMessages());
         InterviewToolCallContext context = buildToolCallContext(mockInterview, historyMessageList);
-        List<ChatMessage> messages = buildConversationMessages(mockInterview, historyMessageList, context);
-        messages.add(ChatMessage.builder().role(ChatMessageRole.USER).content(userMessage).build());
+        List<AiChatMessage> messages = buildConversationMessages(mockInterview, historyMessageList, context);
+        messages.add(buildMessage(AiChatMessageRole.USER, userMessage));
         AiToolChatResult aiToolChatResult = aiManager.doToolLoopChat(
                 messages,
                 buildInterviewTools(),
@@ -250,11 +248,8 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
     private MockInterviewEventResponse handleChatEndEvent(MockInterview mockInterview) {
         List<MockInterviewChatMessage> historyMessageList = parseHistoryMessages(mockInterview.getMessages());
         InterviewToolCallContext context = buildToolCallContext(mockInterview, historyMessageList);
-        List<ChatMessage> messages = buildConversationMessages(mockInterview, historyMessageList, context);
-        messages.add(ChatMessage.builder()
-                .role(ChatMessageRole.USER)
-                .content("候选人要求立即结束面试。请生成完整的面试报告并给出最终总结。")
-                .build());
+        List<AiChatMessage> messages = buildConversationMessages(mockInterview, historyMessageList, context);
+        messages.add(buildMessage(AiChatMessageRole.USER, "候选人要求立即结束面试。请生成完整的面试报告并给出最终总结。"));
         AiToolChatResult aiToolChatResult = aiManager.doToolLoopChat(
                 messages,
                 buildInterviewTools(),
@@ -305,26 +300,24 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
         return context;
     }
 
-    private List<ChatMessage> buildConversationMessages(MockInterview mockInterview,
-                                                        List<MockInterviewChatMessage> historyMessageList,
-                                                        InterviewToolCallContext context) {
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(buildSystemPrompt(mockInterview)).build());
-        messages.add(ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(buildRuntimeContextPrompt(mockInterview, context)).build());
+    private List<AiChatMessage> buildConversationMessages(MockInterview mockInterview,
+                                                          List<MockInterviewChatMessage> historyMessageList,
+                                                          InterviewToolCallContext context) {
+        List<AiChatMessage> messages = new ArrayList<>();
+        messages.add(buildMessage(AiChatMessageRole.SYSTEM, buildSystemPrompt(mockInterview)));
+        messages.add(buildMessage(AiChatMessageRole.SYSTEM, buildRuntimeContextPrompt(mockInterview, context)));
         for (MockInterviewChatMessage historyMessage : historyMessageList) {
             if (StringUtils.isBlank(historyMessage.getRole()) || StringUtils.isBlank(historyMessage.getMessage())) {
                 continue;
             }
-            ChatMessageRole role;
-            try {
-                role = ChatMessageRole.valueOf(StringUtils.upperCase(historyMessage.getRole()));
-            } catch (IllegalArgumentException e) {
+            AiChatMessageRole role = AiChatMessageRole.fromValue(historyMessage.getRole());
+            if (role == null) {
                 continue;
             }
-            if (role != ChatMessageRole.USER && role != ChatMessageRole.ASSISTANT) {
+            if (role != AiChatMessageRole.USER && role != AiChatMessageRole.ASSISTANT) {
                 continue;
             }
-            messages.add(ChatMessage.builder().role(role).content(historyMessage.getMessage()).build());
+            messages.add(buildMessage(role, historyMessage.getMessage()));
         }
         return messages;
     }
@@ -367,8 +360,8 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
                 TOOL_GET_STANDARD_ANSWER);
     }
 
-    private List<ChatTool> buildInterviewTools() {
-        List<ChatTool> tools = new ArrayList<>();
+    private List<AiToolDefinition> buildInterviewTools() {
+        List<AiToolDefinition> tools = new ArrayList<>();
         tools.add(buildSearchQuestionsTool());
         tools.add(buildQuestionDetailTool());
         tools.add(buildStandardAnswerTool());
@@ -376,7 +369,7 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
         return tools;
     }
 
-    private ChatTool buildSearchQuestionsTool() {
+    private AiToolDefinition buildSearchQuestionsTool() {
         ObjectNode parameters = objectMapper.createObjectNode();
         parameters.put("type", "object");
         ObjectNode properties = parameters.putObject("properties");
@@ -395,17 +388,14 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
         ArrayNode required = parameters.putArray("required");
         required.add("topic");
         required.add("difficulty");
-        ChatFunction function = new ChatFunction();
-        function.setName(TOOL_SEARCH_QUESTIONS);
-        function.setDescription("按面试方向和难度搜索候选题目");
-        function.setParameters(parameters);
-        ChatTool tool = new ChatTool();
-        tool.setType("function");
-        tool.setFunction(function);
-        return tool;
+        return AiToolDefinition.builder()
+                .name(TOOL_SEARCH_QUESTIONS)
+                .description("按面试方向和难度搜索候选题目")
+                .parameters(parameters)
+                .build();
     }
 
-    private ChatTool buildQuestionDetailTool() {
+    private AiToolDefinition buildQuestionDetailTool() {
         ObjectNode parameters = objectMapper.createObjectNode();
         parameters.put("type", "object");
         ObjectNode properties = parameters.putObject("properties");
@@ -413,17 +403,14 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
                 .put("type", "integer")
                 .put("description", "题目 id");
         parameters.putArray("required").add("questionId");
-        ChatFunction function = new ChatFunction();
-        function.setName(TOOL_GET_QUESTION_DETAIL);
-        function.setDescription("获取题目详情，用于正式发问");
-        function.setParameters(parameters);
-        ChatTool tool = new ChatTool();
-        tool.setType("function");
-        tool.setFunction(function);
-        return tool;
+        return AiToolDefinition.builder()
+                .name(TOOL_GET_QUESTION_DETAIL)
+                .description("获取题目详情，用于正式发问")
+                .parameters(parameters)
+                .build();
     }
 
-    private ChatTool buildStandardAnswerTool() {
+    private AiToolDefinition buildStandardAnswerTool() {
         ObjectNode parameters = objectMapper.createObjectNode();
         parameters.put("type", "object");
         ObjectNode properties = parameters.putObject("properties");
@@ -431,17 +418,14 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
                 .put("type", "integer")
                 .put("description", "题目 id");
         parameters.putArray("required").add("questionId");
-        ChatFunction function = new ChatFunction();
-        function.setName(TOOL_GET_STANDARD_ANSWER);
-        function.setDescription("获取题目标准答案，用于点评候选人回答");
-        function.setParameters(parameters);
-        ChatTool tool = new ChatTool();
-        tool.setType("function");
-        tool.setFunction(function);
-        return tool;
+        return AiToolDefinition.builder()
+                .name(TOOL_GET_STANDARD_ANSWER)
+                .description("获取题目标准答案，用于点评候选人回答")
+                .parameters(parameters)
+                .build();
     }
 
-    private ChatTool buildFinishInterviewTool() {
+    private AiToolDefinition buildFinishInterviewTool() {
         ObjectNode parameters = objectMapper.createObjectNode();
         parameters.put("type", "object");
         ObjectNode properties = parameters.putObject("properties");
@@ -471,21 +455,17 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
         required.add("weaknesses");
         required.add("suggestions");
         required.add("finalMessage");
-        ChatFunction function = new ChatFunction();
-        function.setName(TOOL_FINISH_INTERVIEW);
-        function.setDescription("结束面试并生成结构化报告");
-        function.setParameters(parameters);
-        ChatTool tool = new ChatTool();
-        tool.setType("function");
-        tool.setFunction(function);
-        return tool;
+        return AiToolDefinition.builder()
+                .name(TOOL_FINISH_INTERVIEW)
+                .description("结束面试并生成结构化报告")
+                .parameters(parameters)
+                .build();
     }
 
-    private String executeInterviewToolCall(ChatToolCall toolCall, MockInterview mockInterview, InterviewToolCallContext context) {
-        ChatFunctionCall function = toolCall.getFunction();
-        ThrowUtils.throwIf(function == null || StringUtils.isBlank(function.getName()), ErrorCode.OPERATION_ERROR, "工具调用缺少函数名");
-        JsonNode argumentsNode = parseArguments(function.getArguments());
-        switch (function.getName()) {
+    private String executeInterviewToolCall(AiToolCall toolCall, MockInterview mockInterview, InterviewToolCallContext context) {
+        ThrowUtils.throwIf(toolCall == null || StringUtils.isBlank(toolCall.getName()), ErrorCode.OPERATION_ERROR, "工具调用缺少函数名");
+        JsonNode argumentsNode = parseArguments(toolCall.getArguments());
+        switch (toolCall.getName()) {
             case TOOL_SEARCH_QUESTIONS:
                 context.setLastToolName(TOOL_SEARCH_QUESTIONS);
                 return handleSearchQuestions(argumentsNode, mockInterview, context);
@@ -499,7 +479,7 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
                 context.setLastToolName(TOOL_FINISH_INTERVIEW);
                 return handleFinishInterview(argumentsNode, mockInterview, context);
             default:
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "未知工具调用: " + function.getName());
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "未知工具调用: " + toolCall.getName());
         }
     }
 
@@ -671,8 +651,8 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
 
     private String resolveFinalAnswer(AiToolChatResult aiToolChatResult, InterviewToolCallContext context) {
         if (aiToolChatResult != null && aiToolChatResult.getAssistantMessage() != null
-                && aiToolChatResult.getAssistantMessage().getContent() != null) {
-            return aiToolChatResult.getAssistantMessage().stringContent();
+                && StrUtil.isNotBlank(aiToolChatResult.getAssistantMessage().getContent())) {
+            return aiToolChatResult.getAssistantMessage().getContent();
         }
         if (StrUtil.isNotBlank(context.getFinalMessage())) {
             return context.getFinalMessage();
@@ -694,14 +674,14 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
 
     private MockInterviewChatMessage buildUserHistoryMessage(String userMessage) {
         MockInterviewChatMessage chatMessage = new MockInterviewChatMessage();
-        chatMessage.setRole(ChatMessageRole.USER.value());
+        chatMessage.setRole(AiChatMessageRole.USER.getValue());
         chatMessage.setMessage(userMessage);
         return chatMessage;
     }
 
     private MockInterviewChatMessage buildAssistantHistoryMessage(String assistantMessage, InterviewToolCallContext context) {
         MockInterviewChatMessage chatMessage = new MockInterviewChatMessage();
-        chatMessage.setRole(ChatMessageRole.ASSISTANT.value());
+        chatMessage.setRole(AiChatMessageRole.ASSISTANT.getValue());
         chatMessage.setMessage(assistantMessage);
         chatMessage.setToolName(context.getLastToolName());
         if (!context.isEnded() && context.getCurrentQuestionId() != null) {
@@ -789,5 +769,12 @@ public class MockInterviewServiceImpl extends ServiceImpl<MockInterviewMapper, M
         } catch (JsonProcessingException e) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "JSON 序列化失败");
         }
+    }
+
+    private AiChatMessage buildMessage(AiChatMessageRole role, String content) {
+        return AiChatMessage.builder()
+                .role(role)
+                .content(content)
+                .build();
     }
 }

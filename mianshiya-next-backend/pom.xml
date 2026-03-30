@@ -49,11 +49,16 @@
             <artifactId>mybatis-plus-boot-starter</artifactId>
             <version>3.5.2</version>
         </dependency>
-        <!-- 火山引擎 AI 接入：https://www.volcengine.com/experience/ark -->
+        <!-- LangChain4j（兼容当前 Java 8 / Spring Boot 2 环境） -->
         <dependency>
-            <groupId>com.volcengine</groupId>
-            <artifactId>volcengine-java-sdk-ark-runtime</artifactId>
-            <version>0.1.152</version>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>0.23.0</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>0.23.0</version>
         </dependency>
         <!-- druid -->
         <dependency>

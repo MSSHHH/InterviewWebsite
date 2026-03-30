@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Avatar, Button, Card, Spin } from "antd";
 import { getQuestionBankVoByIdUsingGet } from "@/api/questionBankController";
+import { listQuestionVoByPageUsingPost } from "@/api/questionController";
 import Meta from "antd/es/card/Meta";
 import Paragraph from "antd/es/typography/Paragraph";
 import Title from "antd/es/typography/Title";
@@ -18,8 +19,11 @@ export default function BankPage({
 }: {
   params: { questionBankId: string };
 }) {
+  const FIRST_PAGE_SIZE = 20;
   const { questionBankId } = params;
   const [bank, setBank] = useState<API.QuestionBankVO>();
+  const [questionList, setQuestionList] = useState<API.QuestionVO[]>([]);
+  const [questionTotal, setQuestionTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -28,13 +32,19 @@ export default function BankPage({
       setLoading(true);
       setLoadError("");
       try {
-        const res = await getQuestionBankVoByIdUsingGet({
-          id: questionBankId,
-          needQueryQuestionList: true,
-          // 可以自行扩展为分页实现
-          pageSize: 200,
-        });
-        setBank((res as API.BaseResponseQuestionBankVO_).data);
+        const [bankRes, questionRes] = await Promise.all([
+          getQuestionBankVoByIdUsingGet({
+            id: Number(questionBankId),
+          }) as Promise<API.BaseResponseQuestionBankVO_>,
+          listQuestionVoByPageUsingPost({
+            questionBankId: Number(questionBankId),
+            current: 1,
+            pageSize: FIRST_PAGE_SIZE,
+          }) as Promise<API.BaseResponsePageQuestionVO_>,
+        ]);
+        setBank(bankRes.data);
+        setQuestionList(questionRes.data?.records ?? []);
+        setQuestionTotal(questionRes.data?.total ?? 0);
       } catch (e: any) {
         const errorMessage = "获取题库详情失败，请刷新重试";
         console.error("获取题库详情失败，" + e.message);
@@ -64,8 +74,8 @@ export default function BankPage({
 
   // 获取第一道题目，用于 “开始刷题” 按钮跳转
   let firstQuestionId;
-  if (bank.questionPage?.records && bank.questionPage.records.length > 0) {
-    firstQuestionId = bank.questionPage.records[0].id;
+  if (questionList.length > 0) {
+    firstQuestionId = questionList[0].id;
   }
 
   return (
@@ -97,8 +107,8 @@ export default function BankPage({
       <div style={{ marginBottom: 16 }} />
       <QuestionList
         questionBankId={questionBankId}
-        questionList={bank.questionPage?.records ?? []}
-        cardTitle={`题目列表（${bank.questionPage?.total || 0}）`}
+        questionList={questionList}
+        cardTitle={`题目列表（${questionTotal}）`}
       />
     </div>
   );

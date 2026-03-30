@@ -11,12 +11,12 @@ import com.alibaba.csp.sentinel.Tracer;
 import com.alibaba.csp.sentinel.slots.block.BlockException;
 import com.alibaba.csp.sentinel.slots.block.degrade.DegradeException;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
 import com.yupi.mianshiya.common.BaseResponse;
 import com.yupi.mianshiya.common.DeleteRequest;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.common.ResultUtils;
+import com.yupi.mianshiya.constant.RedisConstant;
 import com.yupi.mianshiya.constant.UserConstant;
 import com.yupi.mianshiya.exception.BusinessException;
 import com.yupi.mianshiya.exception.ThrowUtils;
@@ -30,6 +30,9 @@ import com.yupi.mianshiya.sentinel.SentinelConstant;
 import com.yupi.mianshiya.service.QuestionService;
 import com.yupi.mianshiya.service.UserService;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBucket;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.*;
@@ -38,6 +41,8 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -62,20 +67,29 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class QuestionController {
 
+    private static final long QUESTION_LIST_REDIS_TTL_SECONDS = 10 * 60L;
+
+    private static final long QUESTION_LIST_LOCK_WAIT_SECONDS = 2L;
+
+    private static final long QUESTION_LIST_LOCK_LEASE_SECONDS = 10L;
+
+    private static final int QUESTION_LIST_RETRY_TIMES = 3;
+
+    private static final long QUESTION_LIST_RETRY_MILLIS = 100L;
+
     /**
-     * 题目分页本地缓存（用于 Sentinel 降级兜底）
+     * 记录当前节点已经写入过的题库第一页 HotKey。
      */
-    private final Cache<String, Page<QuestionVO>> questionListLocalCache = Caffeine.newBuilder()
-            .initialCapacity(128)
-            .maximumSize(5_000)
-            .expireAfterWrite(5, TimeUnit.MINUTES)
-            .build();
+    private final Set<String> questionFirstPageHotKeys = ConcurrentHashMap.newKeySet();
 
     @Resource
     private QuestionService questionService;
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private RedissonClient redissonClient;
 
     // region 增删改查
 
@@ -108,7 +122,7 @@ public class QuestionController {
         // 写入数据库
         boolean result = questionService.save(question);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        questionListLocalCache.invalidateAll();
+        clearQuestionListCaches();
         // 返回新写入的数据 id
         long newQuestionId = question.getId();
         return ResultUtils.success(newQuestionId);
@@ -139,7 +153,7 @@ public class QuestionController {
         // 操作数据库
         boolean result = questionService.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        questionListLocalCache.invalidateAll();
+        clearQuestionListCaches();
         return ResultUtils.success(true);
     }
 
@@ -174,7 +188,7 @@ public class QuestionController {
         // 操作数据库
         boolean result = questionService.updateById(question);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        questionListLocalCache.invalidateAll();
+        clearQuestionListCaches();
         return ResultUtils.success(true);
     }
 
@@ -289,15 +303,53 @@ public class QuestionController {
         Entry entry = null;
         try {
             entry = SphU.entry(SentinelConstant.listQuestionVOByPage, EntryType.IN, 1, remoteAddr);
-            // 被保护的业务逻辑
-            Page<QuestionVO> localCachePage = questionListLocalCache.getIfPresent(listCacheKey);
-            if (localCachePage != null) {
-                return ResultUtils.success(localCachePage);
+            String hotKey = buildQuestionFirstPageHotKey(questionQueryRequest);
+            if (hotKey != null && isHotKey(hotKey)) {
+                Page<QuestionVO> hotCachedPage = getHotKeyQuestionListValue(hotKey);
+                if (hotCachedPage != null) {
+                    return ResultUtils.success(hotCachedPage);
+                }
             }
-            Page<Question> questionPage = questionService.listQuestionByPage(questionQueryRequest);
-            Page<QuestionVO> questionVOPage = questionService.getQuestionVOPage(questionPage, request);
-            questionListLocalCache.put(listCacheKey, questionVOPage);
-            return ResultUtils.success(questionVOPage);
+
+            String redisKey = RedisConstant.getQuestionListRedisKey(listCacheKey);
+            Page<QuestionVO> redisCachedPage = getSharedQuestionList(redisKey);
+            if (redisCachedPage != null) {
+                cacheQuestionList(hotKey, redisCachedPage);
+                return ResultUtils.success(redisCachedPage);
+            }
+
+            String lockKey = RedisConstant.getQuestionListLockKey(listCacheKey);
+            RLock lock = redissonClient.getLock(lockKey);
+            boolean locked = false;
+            try {
+                locked = lock.tryLock(QUESTION_LIST_LOCK_WAIT_SECONDS, QUESTION_LIST_LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
+                if (!locked) {
+                    Page<QuestionVO> waitedQuestionList = waitForSharedQuestionList(redisKey, hotKey);
+                    if (waitedQuestionList != null) {
+                        return ResultUtils.success(waitedQuestionList);
+                    }
+                    log.warn("question list lock not acquired, degrade directly, cacheKey={}", listCacheKey);
+                    return buildQuestionListDegradeResponse(questionQueryRequest, "题目列表正在加载中，请稍后重试");
+                }
+
+                redisCachedPage = getSharedQuestionList(redisKey);
+                if (redisCachedPage != null) {
+                    cacheQuestionList(hotKey, redisCachedPage);
+                    return ResultUtils.success(redisCachedPage);
+                }
+
+                Page<QuestionVO> questionVOPage = loadQuestionVOPage(questionQueryRequest, request);
+                cacheSharedQuestionList(redisKey, questionVOPage);
+                cacheQuestionList(hotKey, questionVOPage);
+                return ResultUtils.success(questionVOPage);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "获取题目列表缓存锁失败");
+            } finally {
+                if (locked && lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
+            }
         } catch (Throwable ex) {
             // 业务异常
             if (!BlockException.isBlockException(ex)) {
@@ -319,37 +371,46 @@ public class QuestionController {
     public BaseResponse<Page<QuestionVO>> handleBlockException(@RequestBody QuestionQueryRequest questionQueryRequest,
                                                                HttpServletRequest request,
                                                                BlockException ex) {
-        BaseResponse<Page<QuestionVO>> cacheFallback = getQuestionListCacheFallback(questionQueryRequest);
-        if (cacheFallback != null) {
-            return cacheFallback;
+        BaseResponse<Page<QuestionVO>> redisFallback = getQuestionListRedisFallback(questionQueryRequest);
+        if (redisFallback != null) {
+            return redisFallback;
         }
         if (ex instanceof DegradeException) {
             return handleFallback(questionQueryRequest, request, ex);
         }
-        return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "访问过于频繁，请稍后再试");
+        return buildQuestionListDegradeResponse(questionQueryRequest, "访问过于频繁，请稍后再试");
     }
 
     /**
-     * listQuestionVOByPageSentinel 降级操作：直接返回本地数据（此处为了方便演示，写在同一个类中）
+     * listQuestionVOByPageSentinel 降级操作：优先读取 Redis，共享缓存也没有时直接返回降级结果。
      */
     public BaseResponse<Page<QuestionVO>> handleFallback(@RequestBody QuestionQueryRequest questionQueryRequest,
                                                          HttpServletRequest request, Throwable ex) {
-        BaseResponse<Page<QuestionVO>> cacheFallback = getQuestionListCacheFallback(questionQueryRequest);
-        if (cacheFallback != null) {
-            return cacheFallback;
+        BaseResponse<Page<QuestionVO>> redisFallback = getQuestionListRedisFallback(questionQueryRequest);
+        if (redisFallback != null) {
+            return redisFallback;
         }
-        long current = questionQueryRequest == null ? 1 : questionQueryRequest.getCurrent();
-        long pageSize = questionQueryRequest == null ? 10 : questionQueryRequest.getPageSize();
-        return ResultUtils.success(new Page<>(current, pageSize, 0));
+        return buildQuestionListDegradeResponse(questionQueryRequest, "题目列表降级中，请稍后再试");
     }
 
-    private BaseResponse<Page<QuestionVO>> getQuestionListCacheFallback(QuestionQueryRequest questionQueryRequest) {
+    private BaseResponse<Page<QuestionVO>> getQuestionListRedisFallback(QuestionQueryRequest questionQueryRequest) {
         String listCacheKey = buildQuestionListCacheKey(questionQueryRequest);
-        Page<QuestionVO> localCachePage = questionListLocalCache.getIfPresent(listCacheKey);
-        if (localCachePage == null) {
+        String redisKey = RedisConstant.getQuestionListRedisKey(listCacheKey);
+        Page<QuestionVO> redisCachedPage = getSharedQuestionList(redisKey);
+        if (redisCachedPage == null) {
             return null;
         }
-        return ResultUtils.success(localCachePage);
+        String hotKey = buildQuestionFirstPageHotKey(questionQueryRequest);
+        cacheQuestionList(hotKey, redisCachedPage);
+        return ResultUtils.success(redisCachedPage);
+    }
+
+    private BaseResponse<Page<QuestionVO>> buildQuestionListDegradeResponse(QuestionQueryRequest questionQueryRequest,
+                                                                            String message) {
+        long current = questionQueryRequest == null || questionQueryRequest.getCurrent() <= 0 ? 1 : questionQueryRequest.getCurrent();
+        long pageSize = questionQueryRequest == null || questionQueryRequest.getPageSize() <= 0 ? 10 : questionQueryRequest.getPageSize();
+        Page<QuestionVO> degradePage = new Page<>(current, pageSize, 0);
+        return new BaseResponse<>(ErrorCode.SYSTEM_ERROR.getCode(), degradePage, message);
     }
 
     private String buildQuestionListCacheKey(QuestionQueryRequest questionQueryRequest) {
@@ -369,6 +430,93 @@ public class QuestionController {
                 questionQueryRequest.getQuestionBankId(),
                 questionQueryRequest.getDifficulty());
         return "question:list:" + DigestUtils.md5DigestAsHex(source.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void clearQuestionListCaches() {
+        for (String hotKey : questionFirstPageHotKeys) {
+            removeHotKey(hotKey);
+        }
+        questionFirstPageHotKeys.clear();
+        redissonClient.getKeys().deleteByPattern(RedisConstant.getQuestionListRedisPattern());
+    }
+
+    private Page<QuestionVO> loadQuestionVOPage(QuestionQueryRequest questionQueryRequest, HttpServletRequest request) {
+        Page<Question> questionPage = questionService.listQuestionByPage(questionQueryRequest);
+        return questionService.getQuestionVOPage(questionPage, request);
+    }
+
+    private Page<QuestionVO> getSharedQuestionList(String redisKey) {
+        RBucket<Page<QuestionVO>> bucket = redissonClient.getBucket(redisKey);
+        return bucket.get();
+    }
+
+    private void cacheSharedQuestionList(String redisKey, Page<QuestionVO> questionVOPage) {
+        RBucket<Page<QuestionVO>> bucket = redissonClient.getBucket(redisKey);
+        bucket.set(questionVOPage, QUESTION_LIST_REDIS_TTL_SECONDS, TimeUnit.SECONDS);
+    }
+
+    private void cacheQuestionList(String hotKey, Page<QuestionVO> questionVOPage) {
+        if (hotKey != null) {
+            questionFirstPageHotKeys.add(hotKey);
+            smartSetHotKey(hotKey, questionVOPage);
+        }
+    }
+
+    private Page<QuestionVO> waitForSharedQuestionList(String redisKey, String hotKey) {
+        for (int i = 0; i < QUESTION_LIST_RETRY_TIMES; i++) {
+            try {
+                TimeUnit.MILLISECONDS.sleep(QUESTION_LIST_RETRY_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+            Page<QuestionVO> redisCachedPage = getSharedQuestionList(redisKey);
+            if (redisCachedPage != null) {
+                cacheQuestionList(hotKey, redisCachedPage);
+                return redisCachedPage;
+            }
+        }
+        return null;
+    }
+
+    protected String buildQuestionFirstPageHotKey(QuestionQueryRequest questionQueryRequest) {
+        if (questionQueryRequest == null || questionQueryRequest.getQuestionBankId() == null) {
+            return null;
+        }
+        int current = questionQueryRequest.getCurrent() <= 0 ? 1 : questionQueryRequest.getCurrent();
+        if (current != 1) {
+            return null;
+        }
+        int pageSize = questionQueryRequest.getPageSize() <= 0 ? 10 : questionQueryRequest.getPageSize();
+        return String.format("question_first_page:bankId=%s|size=%s|sortField=%s|sortOrder=%s",
+                questionQueryRequest.getQuestionBankId(),
+                pageSize,
+                questionQueryRequest.getSortField(),
+                questionQueryRequest.getSortOrder());
+    }
+
+    protected boolean isHotKey(String key) {
+        return JdHotKeyStore.isHotKey(key);
+    }
+
+    @SuppressWarnings("unchecked")
+    protected Page<QuestionVO> getHotKeyQuestionListValue(String key) {
+        Object cachedValue = JdHotKeyStore.get(key);
+        if (cachedValue == null) {
+            return null;
+        }
+        return (Page<QuestionVO>) cachedValue;
+    }
+
+    protected void smartSetHotKey(String key, Page<QuestionVO> questionVOPage) {
+        JdHotKeyStore.smartSet(key, questionVOPage);
+    }
+
+    protected void removeHotKey(String key) {
+        if (key == null) {
+            return;
+        }
+        JdHotKeyStore.remove(key);
     }
 
 
@@ -434,7 +582,7 @@ public class QuestionController {
         // 操作数据库
         boolean result = questionService.updateById(question);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        questionListLocalCache.invalidateAll();
+        clearQuestionListCaches();
         return ResultUtils.success(true);
     }
 
@@ -467,7 +615,7 @@ public class QuestionController {
     public BaseResponse<Boolean> batchDeleteQuestions(@RequestBody QuestionBatchDeleteRequest questionBatchDeleteRequest) {
         ThrowUtils.throwIf(questionBatchDeleteRequest == null, ErrorCode.PARAMS_ERROR);
         questionService.batchDeleteQuestions(questionBatchDeleteRequest.getQuestionIdList());
-        questionListLocalCache.invalidateAll();
+        clearQuestionListCaches();
         return ResultUtils.success(true);
     }
 
@@ -490,7 +638,7 @@ public class QuestionController {
         User loginUser = userService.getLoginUser(request);
         // 调用 AI 生成题目服务
         questionService.aiGenerateQuestions(questionType, number, loginUser);
-        questionListLocalCache.invalidateAll();
+        clearQuestionListCaches();
         // 返回结果
         return ResultUtils.success(true);
     }

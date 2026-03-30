@@ -1,42 +1,49 @@
 package com.yupi.mianshiya.manager;
 
 import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionChoice;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionRequest;
-import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionResult;
-import com.volcengine.ark.runtime.model.completion.chat.ChatFunctionCall;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
-import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
-import com.volcengine.ark.runtime.model.completion.chat.ChatTool;
-import com.volcengine.ark.runtime.model.completion.chat.ChatToolCall;
 import com.yupi.mianshiya.common.ErrorCode;
 import com.yupi.mianshiya.config.AiConfig;
 import com.yupi.mianshiya.exception.BusinessException;
+import com.yupi.mianshiya.model.dto.ai.AiChatMessage;
+import com.yupi.mianshiya.model.dto.ai.AiChatMessageRole;
+import com.yupi.mianshiya.model.dto.ai.AiToolCall;
 import com.yupi.mianshiya.model.dto.ai.AiToolChatResult;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
+import com.yupi.mianshiya.model.dto.ai.AiToolDefinition;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolParameters;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.output.Response;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 
 /**
  * 通用的 AI 调用类
  */
 @Service
+@Slf4j
 public class AiManager {
 
-    private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
+    private static final int DEFAULT_TIMEOUT_SECONDS = 120;
 
     @Resource
     private AiConfig aiConfig;
@@ -44,17 +51,10 @@ public class AiManager {
     @Resource
     private ObjectMapper objectMapper;
 
-    private final OkHttpClient okHttpClient = new OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)
-            .writeTimeout(120, TimeUnit.SECONDS)
-            .build();
+    private final ConcurrentMap<String, OpenAiChatModel> chatModelCache = new ConcurrentHashMap<>();
 
     /**
      * 调用 AI 接口，获取响应字符串
-     *
-     * @param userPrompt
-     * @return
      */
     public String doChat(String userPrompt) {
         return doChat("", userPrompt, getDefaultModel());
@@ -62,10 +62,6 @@ public class AiManager {
 
     /**
      * 调用 AI 接口，获取响应字符串
-     *
-     * @param systemPrompt
-     * @param userPrompt
-     * @return
      */
     public String doChat(String systemPrompt, String userPrompt) {
         return doChat(systemPrompt, userPrompt, getDefaultModel());
@@ -73,89 +69,68 @@ public class AiManager {
 
     /**
      * 调用 AI 接口，获取响应字符串
-     *
-     * @param systemPrompt
-     * @param userPrompt
-     * @param model
-     * @return
      */
     public String doChat(String systemPrompt, String userPrompt, String model) {
-        final List<ChatMessage> messages = new ArrayList<>();
-        final ChatMessage systemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(systemPrompt).build();
-        final ChatMessage userMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build();
-        messages.add(systemMessage);
-        messages.add(userMessage);
+        List<AiChatMessage> messages = new ArrayList<>();
+        if (StrUtil.isNotBlank(systemPrompt)) {
+            messages.add(buildMessage(AiChatMessageRole.SYSTEM, systemPrompt));
+        }
+        messages.add(buildMessage(AiChatMessageRole.USER, userPrompt));
         return doChat(messages, model);
     }
 
     /**
      * 调用 AI 接口，获取响应字符串（允许传入自定义的消息列表，使用默认模型）
-     *
-     * @param messages
-     * @return
      */
-    public String doChat(List<ChatMessage> messages) {
+    public String doChat(List<AiChatMessage> messages) {
         return doChat(messages, getDefaultModel());
     }
 
     /**
      * 调用 AI 接口，获取响应字符串（允许传入自定义的消息列表）
-     *
-     * @param messages
-     * @param model
-     * @return
      */
-    public String doChat(List<ChatMessage> messages, String model) {
-        ChatCompletionRequest chatCompletionRequest = ChatCompletionRequest.builder()
-                .model(model)
-                .messages(messages)
-                .build();
-        ChatCompletionResult chatCompletionResult = executeChatCompletion(chatCompletionRequest);
-        List<ChatCompletionChoice> choices = chatCompletionResult.getChoices();
-        if (CollUtil.isNotEmpty(choices)) {
-            ChatMessage chatMessage = choices.get(0).getMessage();
-            if (chatMessage == null || chatMessage.getContent() == null) {
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 调用失败，没有返回文本内容");
-            }
-            return chatMessage.stringContent();
+    public String doChat(List<AiChatMessage> messages, String model) {
+        Response<AiMessage> response = getChatModel(model).generate(toLangChainMessages(messages));
+        AiMessage aiMessage = response.content();
+        if (aiMessage == null || StrUtil.isBlank(aiMessage.text())) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 调用失败，没有返回文本内容");
         }
-        throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 调用失败，没有返回结果");
+        return aiMessage.text();
     }
 
     /**
      * 调用 AI 接口，获取工具调用结果
      */
-    public AiToolChatResult doToolChat(String systemPrompt, String userPrompt, List<ChatTool> tools, String toolName) {
+    public AiToolChatResult doToolChat(String systemPrompt, String userPrompt, List<AiToolDefinition> tools, String toolName) {
         return doToolChat(systemPrompt, userPrompt, tools, toolName, getDefaultModel());
     }
 
     /**
      * 调用 AI 接口，获取工具调用结果
      */
-    public AiToolChatResult doToolChat(String systemPrompt, String userPrompt, List<ChatTool> tools, String toolName, String model) {
-        final List<ChatMessage> messages = new ArrayList<>();
-        final ChatMessage systemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(systemPrompt).build();
-        final ChatMessage userMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build();
-        messages.add(systemMessage);
-        messages.add(userMessage);
+    public AiToolChatResult doToolChat(String systemPrompt, String userPrompt, List<AiToolDefinition> tools, String toolName, String model) {
+        List<AiChatMessage> messages = new ArrayList<>();
+        if (StrUtil.isNotBlank(systemPrompt)) {
+            messages.add(buildMessage(AiChatMessageRole.SYSTEM, systemPrompt));
+        }
+        messages.add(buildMessage(AiChatMessageRole.USER, userPrompt));
         return doToolChat(messages, tools, toolName, model);
     }
 
     /**
      * 调用 AI 接口，获取工具调用结果
      */
-    public AiToolChatResult doToolChat(List<ChatMessage> messages, List<ChatTool> tools, String toolName, String model) {
-        ChatCompletionRequest.ChatCompletionRequestToolChoiceFunction toolChoiceFunction =
-                new ChatCompletionRequest.ChatCompletionRequestToolChoiceFunction(toolName);
-        ChatCompletionRequest.ChatCompletionRequestToolChoice toolChoice =
-                new ChatCompletionRequest.ChatCompletionRequestToolChoice("function", toolChoiceFunction);
-        ChatCompletionResult chatCompletionResult = executeChatCompletion(buildToolRequest(messages, tools, model, toolChoice));
-        return buildToolChatResult(chatCompletionResult);
+    public AiToolChatResult doToolChat(List<AiChatMessage> messages, List<AiToolDefinition> tools, String toolName, String model) {
+        Response<AiMessage> response = getChatModel(model).generate(
+                toLangChainMessages(messages),
+                toToolSpecifications(tools)
+        );
+        return buildToolChatResult(response, model);
     }
 
     public String getDefaultModel() {
         String model = aiConfig.getModel();
-        if (model == null || model.trim().isEmpty()) {
+        if (StrUtil.isBlank(model)) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 默认模型未配置");
         }
         return model.trim();
@@ -164,255 +139,217 @@ public class AiManager {
     /**
      * 多轮工具调用，直到模型返回最终文本。
      */
-    public AiToolChatResult doToolLoopChat(List<ChatMessage> messages,
-                                           List<ChatTool> tools,
-                                           Function<ChatToolCall, String> toolExecutor,
+    public AiToolChatResult doToolLoopChat(List<AiChatMessage> messages,
+                                           List<AiToolDefinition> tools,
+                                           Function<AiToolCall, String> toolExecutor,
                                            int maxRounds,
                                            String model) {
-        List<ChatMessage> conversation = new ArrayList<>(messages);
+        List<ChatMessage> conversation = new ArrayList<>(toLangChainMessages(messages));
+        List<ToolSpecification> toolSpecifications = toToolSpecifications(tools);
         for (int round = 0; round < maxRounds; round++) {
-            ChatCompletionResult chatCompletionResult = executeChatCompletion(buildToolRequest(conversation, tools, model, null));
-            AiToolChatResult aiToolChatResult = buildToolChatResult(chatCompletionResult);
-            ChatMessage assistantMessage = aiToolChatResult.getAssistantMessage();
-            conversation.add(assistantMessage);
+            Response<AiMessage> response = getChatModel(model).generate(conversation, toolSpecifications);
+            AiToolChatResult aiToolChatResult = buildToolChatResult(response, model);
+            AiMessage aiMessage = response.content();
+            if (aiMessage != null) {
+                conversation.add(aiMessage);
+            }
             if (CollUtil.isEmpty(aiToolChatResult.getToolCalls())) {
-                if (assistantMessage.getContent() != null) {
+                if (aiToolChatResult.getAssistantMessage() != null
+                        && StrUtil.isNotBlank(aiToolChatResult.getAssistantMessage().getContent())) {
                     return aiToolChatResult;
                 }
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 工具调用失败，没有返回文本内容");
             }
-            for (ChatToolCall toolCall : aiToolChatResult.getToolCalls()) {
+            for (AiToolCall toolCall : aiToolChatResult.getToolCalls()) {
                 String toolResult = toolExecutor.apply(toolCall);
-                ChatMessage toolMessage = ChatMessage.builder()
-                        .role(ChatMessageRole.TOOL)
-                        .toolCallId(toolCall.getId())
-                        .content(toolResult)
-                        .build();
-                conversation.add(toolMessage);
+                conversation.add(ToolExecutionResultMessage.from(toolCall.getName(), toolResult));
             }
         }
         throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 工具调用失败，超过最大工具轮次");
     }
 
-    protected ChatCompletionResult executeChatCompletion(ChatCompletionRequest chatCompletionRequest) {
-        String apiKey = aiConfig.getApiKey();
-        if (apiKey == null || apiKey.trim().isEmpty()) {
+    protected OpenAiChatModel getChatModel(String modelName) {
+        validateAiConfig();
+        return chatModelCache.computeIfAbsent(modelName, key -> OpenAiChatModel.builder()
+                .baseUrl(aiConfig.getBaseUrl().trim())
+                .apiKey(aiConfig.getApiKey().trim())
+                .modelName(key)
+                .timeout(Duration.ofSeconds(DEFAULT_TIMEOUT_SECONDS))
+                .build());
+    }
+
+    private void validateAiConfig() {
+        if (StrUtil.isBlank(aiConfig.getApiKey())) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI API Key 未配置");
         }
-        String baseUrl = aiConfig.getBaseUrl();
-        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+        if (StrUtil.isBlank(aiConfig.getBaseUrl())) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI Base URL 未配置");
-        }
-        String requestUrl = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
-        try {
-            RequestBody requestBody = RequestBody.create(buildRequestJson(chatCompletionRequest), JSON_MEDIA_TYPE);
-            Request request = new Request.Builder()
-                    .url(requestUrl)
-                    .addHeader("Authorization", "Bearer " + apiKey.trim())
-                    .addHeader("Content-Type", "application/json")
-                    .post(requestBody)
-                    .build();
-            try (Response response = okHttpClient.newCall(request).execute()) {
-                String responseBody = response.body() != null ? response.body().string() : "";
-                if (!response.isSuccessful()) {
-                    throw new BusinessException(ErrorCode.SYSTEM_ERROR,
-                            String.format("AI 调用失败（HTTP %d）：%s", response.code(), responseBody));
-                }
-                return parseChatCompletionResult(responseBody);
-            }
-        } catch (BusinessException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 调用失败：" + e.getMessage());
         }
     }
 
-    private ChatCompletionRequest buildToolRequest(List<ChatMessage> messages,
-                                                   List<ChatTool> tools,
-                                                   String model,
-                                                   ChatCompletionRequest.ChatCompletionRequestToolChoice toolChoice) {
-        if (toolChoice != null) {
-            return ChatCompletionRequest.builder()
-                    .model(model)
-                    .messages(messages)
-                    .tools(tools)
-                    .toolChoice(toolChoice)
-                    .build();
-        }
-        return ChatCompletionRequest.builder()
-                .model(model)
-                .messages(messages)
-                .tools(tools)
+    private AiChatMessage buildMessage(AiChatMessageRole role, String content) {
+        return AiChatMessage.builder()
+                .role(role)
+                .content(content)
                 .build();
     }
 
-    private String buildRequestJson(ChatCompletionRequest chatCompletionRequest) throws Exception {
-        ObjectNode root = objectMapper.createObjectNode();
-        root.put("model", chatCompletionRequest.getModel());
-        root.set("messages", buildMessagesNode(chatCompletionRequest.getMessages()));
-        if (CollUtil.isNotEmpty(chatCompletionRequest.getTools())) {
-            root.set("tools", buildToolsNode(chatCompletionRequest.getTools()));
-        }
-        if (chatCompletionRequest.getToolChoice() != null) {
-            root.set("tool_choice", buildToolChoiceNode(
-                    (ChatCompletionRequest.ChatCompletionRequestToolChoice) chatCompletionRequest.getToolChoice()));
-        }
-        return objectMapper.writeValueAsString(root);
-    }
-
-    private ArrayNode buildMessagesNode(List<ChatMessage> messages) {
-        ArrayNode messageArray = objectMapper.createArrayNode();
+    private List<ChatMessage> toLangChainMessages(List<AiChatMessage> messages) {
         if (CollUtil.isEmpty(messages)) {
-            return messageArray;
+            return Collections.emptyList();
         }
-        for (ChatMessage message : messages) {
-            ObjectNode messageNode = objectMapper.createObjectNode();
-            messageNode.put("role", message.getRole().value());
-            String content = message.stringContent();
-            if (content != null) {
-                messageNode.put("content", content);
-            } else {
-                messageNode.putNull("content");
+        List<ChatMessage> result = new ArrayList<>(messages.size());
+        for (AiChatMessage message : messages) {
+            if (message == null || message.getRole() == null || StrUtil.isBlank(message.getContent())) {
+                continue;
             }
-            if (message.getToolCallId() != null) {
-                messageNode.put("tool_call_id", message.getToolCallId());
+            switch (message.getRole()) {
+                case SYSTEM:
+                    result.add(SystemMessage.from(message.getContent()));
+                    break;
+                case USER:
+                    result.add(UserMessage.from(message.getContent()));
+                    break;
+                case ASSISTANT:
+                    result.add(AiMessage.from(message.getContent()));
+                    break;
+                default:
+                    throw new BusinessException(ErrorCode.PARAMS_ERROR, "不支持的 AI 消息角色");
             }
-            if (CollUtil.isNotEmpty(message.getToolCalls())) {
-                ArrayNode toolCallsNode = objectMapper.createArrayNode();
-                for (ChatToolCall toolCall : message.getToolCalls()) {
-                    toolCallsNode.add(buildToolCallNode(toolCall));
-                }
-                messageNode.set("tool_calls", toolCallsNode);
-            }
-            messageArray.add(messageNode);
         }
-        return messageArray;
+        return result;
     }
 
-    private ArrayNode buildToolsNode(List<ChatTool> tools) {
-        ArrayNode toolsArray = objectMapper.createArrayNode();
-        for (ChatTool tool : tools) {
-            ObjectNode toolNode = objectMapper.createObjectNode();
-            toolNode.put("type", tool.getType());
-            ObjectNode functionNode = objectMapper.createObjectNode();
-            functionNode.put("name", tool.getFunction().getName());
-            if (tool.getFunction().getDescription() != null) {
-                functionNode.put("description", tool.getFunction().getDescription());
+    private List<ToolSpecification> toToolSpecifications(List<AiToolDefinition> tools) {
+        if (CollUtil.isEmpty(tools)) {
+            return Collections.emptyList();
+        }
+        List<ToolSpecification> result = new ArrayList<>(tools.size());
+        for (AiToolDefinition tool : tools) {
+            result.add(ToolSpecification.builder()
+                    .name(tool.getName())
+                    .description(tool.getDescription())
+                    .parameters(toToolParameters(tool.getParameters()))
+                    .build());
+        }
+        return result;
+    }
+
+    private ToolParameters toToolParameters(JsonNode parametersNode) {
+        if (parametersNode == null || parametersNode.isNull()) {
+            return ToolParameters.builder()
+                    .type("object")
+                    .properties(Collections.<String, Map<String, Object>>emptyMap())
+                    .required(Collections.<String>emptyList())
+                    .build();
+        }
+        String type = getText(parametersNode, "type", "object");
+        Map<String, Map<String, Object>> properties = toProperties(parametersNode.get("properties"));
+        List<String> required = toStringList(parametersNode.get("required"));
+        return ToolParameters.builder()
+                .type(type)
+                .properties(properties)
+                .required(required)
+                .build();
+    }
+
+    private Map<String, Map<String, Object>> toProperties(JsonNode propertiesNode) {
+        if (propertiesNode == null || !propertiesNode.isObject()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Map<String, Object>> properties = new LinkedHashMap<>();
+        propertiesNode.fields().forEachRemaining(entry -> properties.put(entry.getKey(), toObjectMap(entry.getValue())));
+        return properties;
+    }
+
+    private Map<String, Object> toObjectMap(JsonNode jsonNode) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (jsonNode == null || jsonNode.isNull() || !jsonNode.isObject()) {
+            return result;
+        }
+        jsonNode.fields().forEachRemaining(entry -> result.put(entry.getKey(), toJavaValue(entry.getValue())));
+        return result;
+    }
+
+    private Object toJavaValue(JsonNode jsonNode) {
+        if (jsonNode == null || jsonNode.isNull()) {
+            return null;
+        }
+        if (jsonNode.isObject()) {
+            return toObjectMap(jsonNode);
+        }
+        if (jsonNode.isArray()) {
+            List<Object> list = new ArrayList<>();
+            for (JsonNode item : jsonNode) {
+                list.add(toJavaValue(item));
             }
-            JsonNode parametersNode = objectMapper.valueToTree(tool.getFunction().getParameters());
-            functionNode.set("parameters", parametersNode);
-            toolNode.set("function", functionNode);
-            toolsArray.add(toolNode);
+            return list;
         }
-        return toolsArray;
+        if (jsonNode.isTextual()) {
+            return jsonNode.asText();
+        }
+        if (jsonNode.isIntegralNumber()) {
+            return jsonNode.asLong();
+        }
+        if (jsonNode.isFloatingPointNumber()) {
+            return jsonNode.asDouble();
+        }
+        if (jsonNode.isBoolean()) {
+            return jsonNode.asBoolean();
+        }
+        return jsonNode.toString();
     }
 
-    private ObjectNode buildToolChoiceNode(ChatCompletionRequest.ChatCompletionRequestToolChoice toolChoice) {
-        ObjectNode toolChoiceNode = objectMapper.createObjectNode();
-        toolChoiceNode.put("type", toolChoice.getType());
-        if (toolChoice.getFunction() != null) {
-            ObjectNode functionNode = objectMapper.createObjectNode();
-            functionNode.put("name", toolChoice.getFunction().getName());
-            toolChoiceNode.set("function", functionNode);
+    private List<String> toStringList(JsonNode arrayNode) {
+        if (arrayNode == null || !arrayNode.isArray()) {
+            return Collections.emptyList();
         }
-        return toolChoiceNode;
-    }
-
-    private ObjectNode buildToolCallNode(ChatToolCall toolCall) {
-        ObjectNode toolCallNode = objectMapper.createObjectNode();
-        toolCallNode.put("id", toolCall.getId());
-        toolCallNode.put("type", toolCall.getType());
-        if (toolCall.getFunction() != null) {
-            ObjectNode functionNode = objectMapper.createObjectNode();
-            functionNode.put("name", toolCall.getFunction().getName());
-            functionNode.put("arguments", toolCall.getFunction().getArguments());
-            toolCallNode.set("function", functionNode);
-        }
-        return toolCallNode;
-    }
-
-    private ChatCompletionResult parseChatCompletionResult(String responseBody) throws Exception {
-        JsonNode root = objectMapper.readTree(responseBody);
-        JsonNode choicesNode = root.get("choices");
-        ChatCompletionResult chatCompletionResult = new ChatCompletionResult();
-        if (root.hasNonNull("id")) {
-            chatCompletionResult.setId(root.get("id").asText());
-        }
-        if (root.hasNonNull("model")) {
-            chatCompletionResult.setModel(root.get("model").asText());
-        }
-        if (choicesNode == null || !choicesNode.isArray()) {
-            chatCompletionResult.setChoices(new ArrayList<>());
-            return chatCompletionResult;
-        }
-        List<ChatCompletionChoice> choices = new ArrayList<>();
-        for (JsonNode choiceNode : choicesNode) {
-            ChatCompletionChoice choice = new ChatCompletionChoice();
-            JsonNode messageNode = choiceNode.get("message");
-            if (messageNode != null && !messageNode.isNull()) {
-                ChatMessage chatMessage = new ChatMessage();
-                chatMessage.setRole(ChatMessageRole.ASSISTANT);
-                JsonNode contentNode = messageNode.get("content");
-                if (contentNode != null && !contentNode.isNull()) {
-                    if (contentNode.isTextual()) {
-                        chatMessage.setContent(contentNode.asText());
-                    } else {
-                        chatMessage.setContent(objectMapper.writeValueAsString(contentNode));
-                    }
-                }
-                JsonNode toolCallsNode = messageNode.get("tool_calls");
-                if (toolCallsNode != null && toolCallsNode.isArray()) {
-                    List<ChatToolCall> toolCalls = new ArrayList<>();
-                    for (JsonNode toolCallNode : toolCallsNode) {
-                        ChatFunctionCall functionCall = new ChatFunctionCall();
-                        JsonNode functionNode = toolCallNode.get("function");
-                        if (functionNode != null && !functionNode.isNull()) {
-                            if (functionNode.hasNonNull("name")) {
-                                functionCall.setName(functionNode.get("name").asText());
-                            }
-                            if (functionNode.has("arguments") && !functionNode.get("arguments").isNull()) {
-                                JsonNode argumentsNode = functionNode.get("arguments");
-                                if (argumentsNode.isTextual()) {
-                                    functionCall.setArguments(argumentsNode.asText());
-                                } else {
-                                    functionCall.setArguments(objectMapper.writeValueAsString(argumentsNode));
-                                }
-                            }
-                        }
-                        ChatToolCall toolCall = new ChatToolCall();
-                        if (toolCallNode.hasNonNull("id")) {
-                            toolCall.setId(toolCallNode.get("id").asText());
-                        }
-                        if (toolCallNode.hasNonNull("type")) {
-                            toolCall.setType(toolCallNode.get("type").asText());
-                        }
-                        toolCall.setFunction(functionCall);
-                        toolCalls.add(toolCall);
-                    }
-                    chatMessage.setToolCalls(toolCalls);
-                }
-                choice.setMessage(chatMessage);
+        List<String> result = new ArrayList<>();
+        for (JsonNode item : arrayNode) {
+            if (item != null && item.isTextual()) {
+                result.add(item.asText());
             }
-            choices.add(choice);
         }
-        chatCompletionResult.setChoices(choices);
-        return chatCompletionResult;
+        return result;
     }
 
-    private AiToolChatResult buildToolChatResult(ChatCompletionResult chatCompletionResult) {
-        List<ChatCompletionChoice> choices = chatCompletionResult.getChoices();
-        if (CollUtil.isEmpty(choices)) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 工具调用失败，没有返回结果");
+    private String getText(JsonNode jsonNode, String fieldName, String defaultValue) {
+        JsonNode fieldNode = jsonNode.get(fieldName);
+        if (fieldNode == null || fieldNode.isNull()) {
+            return defaultValue;
         }
-        ChatMessage assistantMessage = choices.get(0).getMessage();
-        if (assistantMessage == null) {
+        return fieldNode.asText(defaultValue);
+    }
+
+    private AiToolChatResult buildToolChatResult(Response<AiMessage> response, String model) {
+        AiMessage aiMessage = response.content();
+        if (aiMessage == null) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 工具调用失败，没有返回消息");
         }
-        AiToolChatResult aiToolChatResult = new AiToolChatResult();
-        aiToolChatResult.setRequestId(chatCompletionResult.getId());
-        aiToolChatResult.setModel(chatCompletionResult.getModel());
-        aiToolChatResult.setAssistantMessage(assistantMessage);
-        aiToolChatResult.setToolCalls(assistantMessage.getToolCalls());
-        return aiToolChatResult;
+        AiToolChatResult result = new AiToolChatResult();
+        result.setRequestId(null);
+        result.setModel(model);
+        result.setAssistantMessage(AiChatMessage.builder()
+                .role(AiChatMessageRole.ASSISTANT)
+                .content(aiMessage.text())
+                .build());
+        ToolExecutionRequest toolExecutionRequest = aiMessage.toolExecutionRequest();
+        if (toolExecutionRequest != null) {
+            AiToolCall toolCall = AiToolCall.builder()
+                    .id(null)
+                    .name(toolExecutionRequest.name())
+                    .arguments(toolExecutionRequest.arguments())
+                    .build();
+            result.setToolCalls(Collections.singletonList(toolCall));
+        } else {
+            result.setToolCalls(Collections.<AiToolCall>emptyList());
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("langchain4j ai response model={}, hasToolCall={}, textPresent={}",
+                    model,
+                    toolExecutionRequest != null,
+                    StrUtil.isNotBlank(aiMessage.text()));
+        }
+        return result;
     }
 }

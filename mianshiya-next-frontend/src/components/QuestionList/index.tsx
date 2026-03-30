@@ -5,7 +5,7 @@ import Link from "next/link";
 import "./index.css";
 
 interface Props {
-  questionBankId?: number;
+  questionBankId?: number | string;
   questionList: API.QuestionVO[];
   cardTitle?: string;
 }
